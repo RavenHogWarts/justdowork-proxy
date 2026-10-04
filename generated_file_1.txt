@@ -1,0 +1,3 @@
+cd ~/Desktop
+nano index.html      # yahan code paste karo, phir Ctrl+O Enter, Ctrl+X
+open index.html      # browser mein khulega

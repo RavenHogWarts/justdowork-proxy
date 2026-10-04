@@ -1,0 +1,17 @@
+# Virtual environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Debug / runtime output
+debug_dump/
+debug_log.txt
+debug_log_harness.txt
+
+# Env files
+.env
+*.env
+
+# OS
+.DS_Store
