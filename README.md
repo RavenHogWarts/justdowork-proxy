@@ -52,10 +52,24 @@ export UPSTREAM_API_KEY='your-key'
    python agent_proxy.py
    ```
 
-5. In another terminal, run Claude Code through the proxy:
+5. In another terminal, run Claude Code through the proxy. Add the following to your Claude Code settings (e.g. `~/.claude/settings.json`):
+
+   ```json
+   {
+     "env": {
+       "ANTHROPIC_BASE_URL": "http://127.0.0.1:8181",
+       "ANTHROPIC_MODEL": "claude-opus-4-8",
+       "ANTHROPIC_API_KEY": "your-key",
+       "ENABLE_TOOL_SEARCH": "false"
+     }
+   }
+   ```
+
+   > **Important:** Keep `ENABLE_TOOL_SEARCH` set to `"false"` — the proxy relies on this and it must not be enabled.
+
+   Then run:
 
    ```bash
-   export ANTHROPIC_BASE_URL='http://127.0.0.1:8181'
    claude
    ```
 
