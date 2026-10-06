@@ -1,0 +1,18 @@
+# the virtual environment is created by start.sh / start.bat on first run
+.venv/
+venv/
+env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# ccproxy's own output
+debug_dump/
+*.log
+
+# editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

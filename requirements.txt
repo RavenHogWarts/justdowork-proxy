@@ -1,0 +1,4 @@
+# ccproxy's only dependencies. Both are pure Python, so they install on
+# macOS, Linux and Windows with no compiler needed.
+flask>=3.0,<4
+requests>=2.31,<3

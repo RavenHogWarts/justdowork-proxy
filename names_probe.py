@@ -5,7 +5,7 @@ import requests
 TARGET = "https://api.justwoker.icu/v1/messages"
 KEY = re.sub(r"[^\x21-\x7e]", "", os.environ.get("UPSTREAM_API_KEY", ""))
 if not KEY:
-    raise SystemExit("Pehle chalao: export UPSTREAM_API_KEY='yahan-apni-key'")
+    raise SystemExit("Pehle chalao: export UPSTREAM_API_KEY=''")
 
 CANDIDATES = [
     "read", "write", "edit", "bash", "grep", "glob", "ls", "list", "find", "search",
