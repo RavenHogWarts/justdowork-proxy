@@ -11,6 +11,10 @@ mangle streaming.
 the relay.** The proxy translates both ways, repairs the model's JSON, runs
 web search itself, and hands Claude Code a clean, standards-shaped stream.
 
+> **License:** free for personal, hobby, educational, research, non-profit and
+> government use. **Commercial use — including reselling or hosting it as a
+> paid service — requires a separate written license.** See [License](#license).
+
 ---
 
 ## What it fixes
@@ -325,6 +329,34 @@ afterwards.
 | `names_probe.py` | probe that finds which tool names a relay implements natively |
 | `agent_proxy.py` | **old version — kept for reference only, use `ccproxy.py`** |
 | `ccproxy_log.txt` | the live log (created at runtime) |
+
+---
+
+## License
+
+**PolyForm Noncommercial License 1.0.0** — the full text is in [LICENSE](LICENSE).
+
+**Free to use for:** personal use, hobby projects, study, research, experiment,
+teaching, and by charitable, educational, public research, public safety/health,
+environmental and government organizations.
+
+**Not permitted without a separate written commercial license:**
+
+* reselling, sublicensing or rebranding this software, or a modified copy of it
+* running it as a hosted or paid service (SaaS, paid API, managed deployment)
+* embedding it in a commercial product
+* using it internally at a for-profit company in support of revenue-generating work
+* monetising it with ads or subscriptions
+
+Anyone who receives a copy from you must also receive the license terms and the
+`Required Notice:` line — see the [Notices](LICENSE#notices) section.
+
+For a **commercial license**, open an issue or contact
+[@abdurrehmandaudi](https://github.com/abdurrehmandaudi).
+
+This project is **source-available, not open source**. The source is public on
+purpose: so you can read it, audit it, and check for yourself that a proxy
+sitting between you and your API key isn't doing anything hidden.
 
 ---
 

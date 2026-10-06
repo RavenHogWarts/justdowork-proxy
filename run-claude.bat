@@ -1,4 +1,9 @@
 @echo off
+rem Copyright (c) 2026 abdurrehmandaudi
+rem Required Notice: Copyright (c) 2026 abdurrehmandaudi -- justdowork-proxy
+rem Licensed under the PolyForm Noncommercial License 1.0.0 -- commercial
+rem use is not permitted without a separate written commercial license.
+rem See LICENSE or https://polyformproject.org/licenses/noncommercial/1.0.0
 rem ---------------------------------------------------------------------------
 rem  Run Claude Code through ccproxy on Windows -- WITHOUT touching your global
 rem  %USERPROFILE%\.claude\settings.json. Both setups can be used side by side.
