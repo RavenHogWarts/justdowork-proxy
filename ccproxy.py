@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Copyright (c) 2026 abdurrehmandaudi
+# Copyright (c) 2026 RavenHogwarts (modifications)
 # Required Notice: Copyright (c) 2026 abdurrehmandaudi -- justdowork-proxy
 # Licensed under the PolyForm Noncommercial License 1.0.0 -- commercial
 # use is not permitted without a separate written commercial license.

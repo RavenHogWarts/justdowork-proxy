@@ -244,6 +244,10 @@ docker run -d --name justdowork-proxy --restart unless-stopped \
   ghcr.io/ravenhogwarts/justdowork-proxy
 ```
 
+> **许可证：** 本镜像基于 PolyForm Noncommercial License 1.0.0 分发——个人、
+> 业余、教育、研究、非营利与政府用途免费；商业用途需单独的书面授权。完整条款
+> 与版权声明已随镜像打包在 `/app/LICENSE`。详见 [LICENSE](LICENSE)。
+
 密钥同样三种放法：`-e UPSTREAM_API_KEY=...` 后备、cc-switch 客户端密钥、
 或进容器后访问 `http://127.0.0.1:18181/` 面板设置。
 

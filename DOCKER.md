@@ -83,6 +83,12 @@ docker run -d --name justdowork-proxy --restart unless-stopped \
   ghcr.io/ravenhogwarts/justdowork-proxy
 ```
 
+> **License:** this image is distributed under the PolyForm Noncommercial
+> License 1.0.0 — free for personal, hobby, educational, research, non-profit
+> and government use; commercial use requires a separate written license. The
+> full terms and the required copyright notice ship inside the image at
+> `/app/LICENSE`. See [LICENSE](LICENSE).
+
 ---
 
 ## Connecting Claude Code

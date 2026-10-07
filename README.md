@@ -358,6 +358,11 @@ This project is **source-available, not open source**. The source is public on
 purpose: so you can read it, audit it, and check for yourself that a proxy
 sitting between you and your API key isn't doing anything hidden.
 
+The Docker packaging and related modifications in this fork are contributed by
+RavenHogwarts and remain under the same PolyForm Noncommercial License 1.0.0;
+they do not relicense the project or lift its noncommercial restriction. The
+upstream copyright and `Required Notice:` line are preserved.
+
 ---
 
 ## Notes
