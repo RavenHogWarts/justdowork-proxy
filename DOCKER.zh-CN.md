@@ -230,6 +230,12 @@ curl -X POST http://127.0.0.1:18181/api/key \
 不用 compose、直接 `docker run` 的话，改 `-p` 左侧即可：
 `-p 127.0.0.1:28181:8181`。
 
+### 界面语言
+
+dashboard 支持中英文：点右上角按钮（中 / EN）切换，选择会记住在该浏览器里；
+默认语言跟随 `config.json` 的 `ui_lang` 字段（`en` 或 `zh`，Docker 下经
+[挂载自定义 config.json](#七挂载自定义-configjson) 修改）。
+
 ### 看日志
 
 ```sh

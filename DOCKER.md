@@ -105,6 +105,13 @@ never needs to change:
   port (cc-switch endpoint, or `PROXY=http://127.0.0.1:28181`).
 * **docker run:** change the `-p` left side: `-p 127.0.0.1:28181:8181`.
 
+### Dashboard language
+
+The dashboard is bilingual (English / 简体中文): the button in the header
+switches language and the choice is remembered per browser. The default
+language follows the `ui_lang` field of `config.json` (`en` or `zh`; in
+Docker, change it via a mounted `config.json`).
+
 ---
 
 ## The optional .env

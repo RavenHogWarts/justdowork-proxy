@@ -12,6 +12,10 @@ a plain page if this module fails to import).
 
 The page polls `/stats.json` every 2 seconds. No CDN, no internet access --
 everything is inside this one file.
+
+The UI is bilingual (English / 简体中文): the button in the header switches
+language, the choice is remembered per browser, and the initial language
+follows the `ui_lang` field of config.json (exposed via /stats.json).
 """
 
 DASHBOARD_HTML = r"""<!doctype html>
@@ -104,15 +108,16 @@ DASHBOARD_HTML = r"""<!doctype html>
     </div>
     <div class="meta" id="meta"></div>
     <div style="display:flex;gap:8px">
-      <button id="pause">Pause</button>
-      <button id="reset">Reset</button>
+      <button id="lang" title="Language / 语言">中</button>
+      <button id="pause"></button>
+      <button id="reset"></button>
     </div>
   </header>
 
-  <h2>Token spend</h2>
+  <h2 data-i18n="secTokens"></h2>
   <div class="cards" id="cards"></div>
 
-  <h2>Where the data goes</h2>
+  <h2 data-i18n="secData"></h2>
   <div class="grid2">
     <div class="panel">
       <div class="bar" id="bar"></div>
@@ -120,27 +125,28 @@ DASHBOARD_HTML = r"""<!doctype html>
       <div class="hint" id="barhint"></div>
       <div class="hint" id="budget"></div>
       <div class="strip" id="strip"></div>
-      <div class="hint">Each bar is one request's input (height = tokens).
-        <span style="color:var(--violet)">Violet</span> = the request used a web tool,
-        <span style="color:var(--bad)">red</span> = failed.</div>
+      <div class="hint" id="striphint"></div>
     </div>
     <div class="panel">
-      <div class="muted" style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em">
-        Tool usage</div>
+      <div class="muted" style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em"
+           data-i18n="toolUsage"></div>
       <div class="chips" id="tools" style="margin-top:10px"></div>
-      <div class="muted" style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;margin-top:16px">
-        Disk</div>
+      <div class="muted" style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;margin-top:16px"
+           data-i18n="disk"></div>
       <div class="chips" id="disk" style="margin-top:10px"></div>
     </div>
   </div>
 
-  <h2>Recent requests</h2>
+  <h2 data-i18n="secRecent"></h2>
   <div class="tblwrap">
     <table>
       <thead><tr>
-        <th>#</th><th>Time</th><th>Kind</th><th class="num">Msgs</th>
-        <th class="num">Input</th><th class="num">Output</th><th class="num">Sec</th>
-        <th>Tools</th><th class="num">Drops</th><th>Note</th>
+        <th>#</th><th data-i18n="thTime"></th><th data-i18n="thKind"></th>
+        <th class="num" data-i18n="thMsgs"></th>
+        <th class="num" data-i18n="thInput"></th><th class="num" data-i18n="thOutput"></th>
+        <th class="num" data-i18n="thSec"></th>
+        <th data-i18n="thTools"></th><th class="num" data-i18n="thDrops"></th>
+        <th data-i18n="thNote"></th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -148,21 +154,19 @@ DASHBOARD_HTML = r"""<!doctype html>
 
   <div id="errbox"></div>
 
-  <h2>API key</h2>
+  <h2 data-i18n="secKey"></h2>
   <div class="panel">
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-      <span class="muted">current:</span>
+      <span class="muted" data-i18n="keyCurrent"></span>
       <b class="err" id="keycur">loading ...</b>
       <span id="keypill"></span>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
-      <input id="keyin" type="password" placeholder="sk-..." autocomplete="off"
-             spellcheck="false" style="flex:1;min-width:220px">
-      <button id="keysave">Save key</button>
+      <input id="keyin" type="password" autocomplete="off" spellcheck="false"
+             style="flex:1;min-width:220px">
+      <button id="keysave"></button>
     </div>
-    <div class="hint" id="keyhint">Applied immediately, no restart needed. Saved to
-      .env when the file is writable, so it survives restarts; otherwise it applies
-      until the next restart.</div>
+    <div class="hint" id="keyhint"></div>
   </div>
 
 </div>
@@ -170,6 +174,146 @@ DASHBOARD_HTML = r"""<!doctype html>
 <script>
 "use strict";
 var paused = false, last = null, tick = 0;
+
+/* ---- i18n ------------------------------------------------------------- */
+var I18N = {
+  en: {
+    pause: "Pause", resume: "Resume", reset: "Reset",
+    up: "up {t}", upstream: "upstream", model: "model", key: "key", avg: "avg {v}s",
+    keySet: "set", keyMissing: "MISSING", keyClient: "client-supplied",
+    secTokens: "Token spend", secData: "Where the data goes",
+    secRecent: "Recent requests", secErrors: "Recent errors", secKey: "API key",
+    cardRequests: "Requests", cardRequestsSub: "{ok} ok \u00b7 {fail} failed",
+    cardTotal: "Total tokens", cardTotalSub: "input + output, what the relay bills",
+    cardInput: "Input tokens", cardInputSub: "avg {n} / request",
+    cardOutput: "Output tokens", cardOutputSub: "written by the model",
+    cardSaved: "Avoided by trimming", cardSavedSub: "never sent, so never billed",
+    cardPhantom: "Phantom (relay)", cardPhantomSub: "baseline {n} subtracted",
+    cardOverhead: "Relay overhead", cardOverheadSub: "every request, inside input",
+    cardTools: "Tool calls", cardToolsSub: "web {w} \u00b7 client {c}",
+    cardDrops: "Dropped calls", dropsCheck: "check the log", dropsNone: "none",
+    cardUpstream: "Upstream calls", retry: "{n} retry", retries: "{n} retries",
+    legSystem: "System prompt", legTools: "Tool definitions",
+    legHistory: "History", legOutput: "Model output",
+    barTotal: "Total {n} tokens. This is what the proxy itself sent upstream.",
+    barPhantom: " The relay's phantom {n} tokens are shown separately.",
+    barNone: "No requests yet.",
+    budgetLine: "Average request: <b>{s}</b> tokens sent (history window limit ~{l}). " +
+                "History averaged <b>{h}</b> tokens kept out of <b>{r}</b> offered &mdash; {tail}",
+    budgetTrim: "<b>{n}</b> tokens per request were trimmed away.",
+    budgetNone: "nothing needed trimming yet.",
+    stripIntro: "Each bar is one request's input (height = tokens). ",
+    stripViolet: "Violet", stripMid: " = the request used a web tool, ",
+    stripRed: "red", stripEnd: " = failed.",
+    toolUsage: "Tool usage", toolsEmpty: "nothing yet", disk: "Disk",
+    logChip: "log", dumpChip: "debug_dump", dumpsChip: "dumps",
+    dumpsOn: "ON", dumpsOff: "off",
+    thTime: "Time", thKind: "Kind", thMsgs: "Msgs", thInput: "Input",
+    thOutput: "Output", thSec: "Sec", thTools: "Tools", thDrops: "Drops",
+    thNote: "Note", pillStream: "stream", pillWeb: "web", pillFail: "fail",
+    emptyTable: "No requests yet. Point Claude Code at this proxy " +
+                "(set ANTHROPIC_BASE_URL to its address) and ask it something.",
+    okWord: "ok", dash: "-",
+    keyCurrent: "current:", notSet: "not set",
+    pillSet: "set", pillMissing: "missing",
+    pillClientNone: "none &mdash; client-supplied keys in use",
+    keyPlaceholder: "sk-...", keySave: "Save key",
+    keyHint: "Applied immediately, no restart needed. Saved to .env when the file " +
+             "is writable, so it survives restarts; otherwise it applies until the " +
+             "next restart.",
+    keyEnterFirst: "Enter a key first.",
+    keySaved: "Saved and applied -- survives restarts.",
+    keyTemp: "Applied for this run only (.env is not writable here).",
+    keyFailedPfx: "Failed: ", keyReqFail: "Request failed.",
+    confirmReset: "Reset all counters? The recent-requests list will be cleared too."
+  },
+  zh: {
+    pause: "暂停", resume: "继续", reset: "重置",
+    up: "运行 {t}", upstream: "上游", model: "模型", key: "密钥", avg: "平均 {v}s",
+    keySet: "已设置", keyMissing: "未设置", keyClient: "客户端提供",
+    secTokens: "Token 消耗", secData: "数据都去了哪",
+    secRecent: "最近请求", secErrors: "最近错误", secKey: "API 密钥",
+    cardRequests: "请求数", cardRequestsSub: "{ok} 成功 \u00b7 {fail} 失败",
+    cardTotal: "总 Token", cardTotalSub: "输入 + 输出，中转站计费的部分",
+    cardInput: "输入 Token", cardInputSub: "平均 {n} / 次",
+    cardOutput: "输出 Token", cardOutputSub: "模型生成的部分",
+    cardSaved: "裁剪省下的", cardSavedSub: "未发送，不会计费",
+    cardPhantom: "幻影 Token（中转站）", cardPhantomSub: "已减去基线 {n}",
+    cardOverhead: "中转站开销", cardOverheadSub: "每次请求都加在输入里",
+    cardTools: "工具调用", cardToolsSub: "网络工具 {w} \u00b7 客户端 {c}",
+    cardDrops: "丢弃的调用", dropsCheck: "查看日志", dropsNone: "无",
+    cardUpstream: "上游调用", retry: "{n} 次重试", retries: "{n} 次重试",
+    legSystem: "系统提示词", legTools: "工具定义",
+    legHistory: "历史消息", legOutput: "模型输出",
+    barTotal: "共 {n} Token。这是代理实际发往上游的部分。",
+    barPhantom: " 中转站的幻影 {n} Token 已单独列示。",
+    barNone: "还没有请求。",
+    budgetLine: "平均每次请求发送 <b>{s}</b> Token（历史上限约 {l}）。" +
+                "历史保留平均 <b>{h}</b> Token / 次，原始 <b>{r}</b> Token &mdash; {tail}",
+    budgetTrim: "每次请求裁掉了 <b>{n}</b> Token。",
+    budgetNone: "暂无需裁剪。",
+    stripIntro: "每根柱条是一个请求的输入（高度 = Token 数）。",
+    stripViolet: "紫色", stripMid: " = 该请求用了网络工具，",
+    stripRed: "红色", stripEnd: " = 失败。",
+    toolUsage: "工具使用", toolsEmpty: "暂无数据", disk: "磁盘",
+    logChip: "日志", dumpChip: "调试转储", dumpsChip: "转储",
+    dumpsOn: "开", dumpsOff: "关",
+    thTime: "时间", thKind: "类型", thMsgs: "消息", thInput: "输入",
+    thOutput: "输出", thSec: "秒", thTools: "工具", thDrops: "丢弃",
+    thNote: "备注", pillStream: "流式", pillWeb: "网络", pillFail: "失败",
+    emptyTable: "还没有请求。把 Claude Code 指向本代理（设置 ANTHROPIC_BASE_URL" +
+                " 为其地址）后随便问点什么。",
+    okWord: "正常", dash: "-",
+    keyCurrent: "当前：", notSet: "未设置",
+    pillSet: "已设置", pillMissing: "缺失",
+    pillClientNone: "无 &mdash; 正在使用客户端密钥",
+    keyPlaceholder: "sk-...", keySave: "保存密钥",
+    keyHint: "立即生效，无需重启。.env 可写时会保存到其中，重启后依然有效；" +
+             "否则仅本次运行有效。",
+    keyEnterFirst: "先输入密钥。",
+    keySaved: "已保存并生效 —— 重启后依然有效。",
+    keyTemp: "仅本次运行有效（.env 不可写）。",
+    keyFailedPfx: "失败：", keyReqFail: "请求失败。",
+    confirmReset: "重置所有计数器？最近请求列表也会被清空。"
+  }
+};
+
+var LANG = "en", langLocked = false;
+try {
+  LANG = localStorage.getItem("ccproxy_lang") || "en";
+  langLocked = !!LANG;
+} catch (e) {}
+if (!I18N[LANG]) LANG = "en";
+
+function t(k){
+  var d = I18N[LANG];
+  if (d && d[k] != null) return d[k];
+  if (I18N.en[k] != null) return I18N.en[k];
+  return k;
+}
+function tf(k, vars){
+  return t(k).replace(/\{(\w+)\}/g, function(_, name){ return vars[name]; });
+}
+function setLang(l, save){
+  if (!I18N[l]) return;
+  LANG = l;
+  if (save){
+    langLocked = true;
+    try { localStorage.setItem("ccproxy_lang", l); } catch (e) {}
+  }
+  applyStatic();
+  if (last) render(last);
+}
+function applyStatic(){
+  var els = document.querySelectorAll("[data-i18n]"), i;
+  for (i = 0; i < els.length; i++) els[i].textContent = t(els[i].getAttribute("data-i18n"));
+  el("pause").textContent = t(paused ? "resume" : "pause");
+  el("reset").textContent = t("reset");
+  el("lang").textContent = (LANG === "en") ? "中" : "EN";
+  el("keyin").placeholder = t("keyPlaceholder");
+  el("keysave").textContent = t("keySave");
+  el("keyhint").textContent = t("keyHint");
+}
 
 function el(id){ return document.getElementById(id); }
 
@@ -201,7 +345,7 @@ function esc(s){
     return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
   });
 }
-function sum(o){ var t = 0, k; for (k in o) if (o.hasOwnProperty(k)) t += Number(o[k]) || 0; return t; }
+function sum(o){ var t2 = 0, k; for (k in o) if (o.hasOwnProperty(k)) t2 += Number(o[k]) || 0; return t2; }
 
 function card(k, v, sub, cls){
   return '<div class="card"><div class="k">' + esc(k) + '</div>' +
@@ -213,43 +357,48 @@ function render(s){
   last = s;
   var reqs = s.total_reqs || 0, ok = s.ok || 0, fail = s.fail || 0;
 
+  // first paint: follow config.json's ui_lang unless the user chose here
+  if (!langLocked && s.ui_lang && String(s.ui_lang).toLowerCase().indexOf("zh") === 0
+      && LANG !== "zh") setLang("zh", false);
+
   el("dot").className = "dot" + ((s.key_set || s.client_key_passthrough) ? "" : " off");
-  el("uptime").textContent = "| up " + uptime(s.uptime_s + tick);
+  el("uptime").textContent = "| " + tf("up", {t: uptime(s.uptime_s + tick)});
   el("meta").innerHTML =
-    "<span>upstream <b>" + esc(s.upstream) + "</b></span>" +
-    "<span>model <b>" + esc(s.model) + "</b></span>" +
-    "<span>key <b>" + (s.key_set ? "set"
-                    : (s.client_key_passthrough ? "client-supplied" : "MISSING")) + "</b></span>" +
-    "<span>avg <b>" + (reqs ? (Number(s.duration||0)/reqs).toFixed(1) : "0") + "s</b></span>";
+    "<span>" + t("upstream") + " <b>" + esc(s.upstream) + "</b></span>" +
+    "<span>" + t("model") + " <b>" + esc(s.model) + "</b></span>" +
+    "<span>" + t("key") + " <b>" + (s.key_set ? t("keySet")
+        : (s.client_key_passthrough ? t("keyClient") : t("keyMissing"))) + "</b></span>" +
+    "<span>" + tf("avg", {v: reqs ? (Number(s.duration||0)/reqs).toFixed(1) : "0"}) + "</span>";
 
   var avgIn = reqs ? Math.round((s.in_tok||0)/reqs) : 0;
   var totalTok = (s.in_tok||0) + (s.out_tok||0);
   el("cards").innerHTML =
-    card("Requests", fmt(reqs), ok + " ok &middot; " + fail + " failed",
+    card(t("cardRequests"), fmt(reqs), tf("cardRequestsSub", {ok: ok, fail: fail}),
          fail ? "" : "good") +
-    card("Total tokens", fmt(totalTok), "input + output, what the relay bills", "accent") +
-    card("Input tokens", fmt(s.in_tok), "avg " + fmt(avgIn) + " / request", "accent") +
-    card("Output tokens", fmt(s.out_tok), "written by the model", "violet") +
-    card("Avoided by trimming", fmt(s.saved_tok),
-         "never sent, so never billed", "good") +
+    card(t("cardTotal"), fmt(totalTok), t("cardTotalSub"), "accent") +
+    card(t("cardInput"), fmt(s.in_tok), tf("cardInputSub", {n: fmt(avgIn)}), "accent") +
+    card(t("cardOutput"), fmt(s.out_tok), t("cardOutputSub"), "violet") +
+    card(t("cardSaved"), fmt(s.saved_tok), t("cardSavedSub"), "good") +
     (s.phantom_tok > 0
-      ? card("Phantom (relay)", fmt(s.phantom_tok),
-             "baseline " + fmt(s.usage_baseline_tokens) + " subtracted", "warn")
-      : card("Relay overhead", "~10.4k",
-             "every request, inside input", "warn")) +
-    card("Tool calls", fmt(sum(s.tool_uses) + sum(s.server_tools)),
-         "web " + sum(s.server_tools) + " &middot; client " + sum(s.tool_uses)) +
-    card("Dropped calls", fmt(s.drops_total),
-         s.drops_total ? "check the log" : "none", s.drops_total ? "bad" : "good") +
-    card("Upstream calls", fmt(s.upstream_calls),
-         (s.retries_total||0) + " retry", (s.retries_total ? "warn" : ""));
+      ? card(t("cardPhantom"), fmt(s.phantom_tok),
+             tf("cardPhantomSub", {n: fmt(s.usage_baseline_tokens)}), "warn")
+      : card(t("cardOverhead"), "~10.4k", t("cardOverheadSub"), "warn")) +
+    card(t("cardTools"), fmt(sum(s.tool_uses) + sum(s.server_tools)),
+         tf("cardToolsSub", {w: sum(s.server_tools), c: sum(s.tool_uses)})) +
+    card(t("cardDrops"), fmt(s.drops_total),
+         s.drops_total ? t("dropsCheck") : t("dropsNone"),
+         s.drops_total ? "bad" : "good") +
+    card(t("cardUpstream"), fmt(s.upstream_calls),
+         (s.retries_total||0) === 1 ? tf("retry", {n: s.retries_total})
+                                    : tf("retries", {n: s.retries_total||0}),
+         (s.retries_total ? "warn" : ""));
 
   // ---- where the data goes ----
   var parts = [
-    ["System prompt", s.sys_tok, "#5b9dff"],
-    ["Tool definitions", s.tools_tok, "#a78bfa"],
-    ["History", s.hist_tok, "#3ecf8e"],
-    ["Model output", s.out_tok, "#ffb454"]
+    [t("legSystem"), s.sys_tok, "#5b9dff"],
+    [t("legTools"), s.tools_tok, "#a78bfa"],
+    [t("legHistory"), s.hist_tok, "#3ecf8e"],
+    [t("legOutput"), s.out_tok, "#ffb454"]
   ];
   var tot = 0, i;
   for (i = 0; i < parts.length; i++) tot += Number(parts[i][1]) || 0;
@@ -265,11 +414,10 @@ function render(s){
   el("bar").innerHTML = bar;
   el("legend").innerHTML = leg;
   el("barhint").textContent = tot
-    ? "Total " + fmt(tot) + " tokens. This is what the proxy itself sent upstream."
-    : "No requests yet.";
-  if (s.usage_baseline_tokens > 0)
-    el("barhint").textContent += " The relay's phantom " + fmt(s.usage_baseline_tokens) +
-                                  " tokens are shown separately.";
+    ? tf("barTotal", {n: fmt(tot)})
+    : t("barNone");
+  if (tot && s.usage_baseline_tokens > 0)
+    el("barhint").textContent += tf("barPhantom", {n: fmt(s.usage_baseline_tokens)});
 
   // ---- how much of the budget each request actually used ----
   var budgetEl = el("budget");
@@ -278,16 +426,17 @@ function render(s){
     var histAvg = Math.round((s.hist_tok||0)/reqs);
     var rawAvg  = Math.round((s.raw_hist_tok||0)/reqs);
     var limitTok = Math.round(s.max_history_chars/4);
-    budgetEl.innerHTML =
-      "Average request: <b>" + fmt(sentAvg) + "</b> tokens sent (history window limit ~" +
-      fmt(limitTok) + "). History averaged <b>" + fmt(histAvg) + "</b> tokens kept out of <b>" +
-      fmt(rawAvg) + "</b> offered &mdash; " +
-      (rawAvg > histAvg
-        ? "<b>" + fmt(rawAvg - histAvg) + "</b> tokens per request were trimmed away."
-        : "nothing needed trimming yet.");
+    var tail = rawAvg > histAvg ? tf("budgetTrim", {n: fmt(rawAvg - histAvg)})
+                                : t("budgetNone");
+    budgetEl.innerHTML = tf("budgetLine", {s: fmt(sentAvg), l: fmt(limitTok),
+                                           h: fmt(histAvg), r: fmt(rawAvg), tail: tail});
   } else if (budgetEl) {
     budgetEl.innerHTML = "";
   }
+
+  el("striphint").innerHTML = t("stripIntro") +
+      '<span style="color:var(--violet)">' + t("stripViolet") + '</span>' + t("stripMid") +
+      '<span style="color:var(--bad)">' + t("stripRed") + '</span>' + t("stripEnd");
 
   var rec = (s.recent || []).slice(0, 60).reverse();
   var mx = 1;
@@ -299,7 +448,7 @@ function render(s){
     st += '<div class="' + cls + '" style="height:' + h + '%;" title="#' + r.n + " " +
           esc(r.ts) + " - " + fmt(r.in_tok) + " in / " + fmt(r.out_tok) + ' out"></div>';
   }
-  el("strip").innerHTML = st || '<div class="muted" style="height:auto">no data yet</div>';
+  el("strip").innerHTML = st || '<div class="muted" style="height:auto">' + t("barNone") + '</div>';
 
   // ---- tools ----
   var tc = "", name;
@@ -310,14 +459,15 @@ function render(s){
   var keys = Object.keys(all).sort(function(a,b){ return all[b]-all[a]; });
   for (i = 0; i < keys.length; i++)
     tc += '<span class="chip">' + esc(keys[i]) + ' <b>' + fmt(all[keys[i]]) + '</b></span>';
-  el("tools").innerHTML = tc || '<span class="muted">nothing yet</span>';
+  el("tools").innerHTML = tc || '<span class="muted">' + t("toolsEmpty") + '</span>';
 
   el("disk").innerHTML =
-    '<span class="chip">log <b>' + bytes(s.disk.log_bytes) + '</b></span>' +
-    '<span class="chip">debug_dump <b>' + bytes(s.disk.dump_bytes) + '</b> ' +
-    '<span class="muted">(' + s.disk.dump_files + ' files)</span></span>' +
-    '<span class="chip">dumps ' +
-    (s.dump_requests ? '<b style="color:var(--warn)">ON</b>' : '<b>off</b>') + '</span>';
+    '<span class="chip">' + t("logChip") + ' <b>' + bytes(s.disk.log_bytes) + '</b></span>' +
+    '<span class="chip">' + t("dumpChip") + ' <b>' + bytes(s.disk.dump_bytes) + '</b> ' +
+    '<span class="muted">(' + s.disk.dump_files + ')</span></span>' +
+    '<span class="chip">' + t("dumpsChip") + ' ' +
+    (s.dump_requests ? '<b style="color:var(--warn)">' + t("dumpsOn") + '</b>'
+                     : '<b>' + t("dumpsOff") + '</b>') + '</span>';
 
   // ---- table ----
   var rows = "";
@@ -325,36 +475,35 @@ function render(s){
   for (i = 0; i < list.length; i++){
     var r = list[i];
     var pills = "";
-    if (!r.ok) pills += '<span class="pill no">fail ' + r.status + '</span> ';
-    if (r.stream) pills += '<span class="pill st">stream</span> ';
-    if (Number(r.server_tools)) pills += '<span class="pill dr">web</span> ';
+    if (!r.ok) pills += '<span class="pill no">' + t("pillFail") + " " + r.status + "</span> ";
+    if (r.stream) pills += '<span class="pill st">' + t("pillStream") + "</span> ";
+    if (Number(r.server_tools)) pills += '<span class="pill dr">' + t("pillWeb") + "</span> ";
     var nm = (r.names || []).join(", ");
     rows += "<tr>" +
       "<td>" + r.n + "</td>" +
       "<td>" + esc(r.ts) + "</td>" +
-      "<td>" + (pills || '<span class="muted">-</span>') + "</td>" +
+      "<td>" + (pills || '<span class="muted">' + t("dash") + "</span>") + "</td>" +
       '<td class="num">' + r.client_msgs + "&rarr;" + r.sent_msgs + "</td>" +
       '<td class="num">' + fmt(r.in_tok) + "</td>" +
       '<td class="num">' + fmt(r.out_tok) + "</td>" +
       '<td class="num">' + r.dur + "</td>" +
-      "<td>" + (nm ? esc(nm) : '<span class="muted">-</span>') + "</td>" +
-      '<td class="num">' + (r.drops ? '<span class="pill dr">' + r.drops + "</span>" : "-") + "</td>" +
-      "<td>" + (r.note ? esc(r.note) : '<span class="muted">ok</span>') + "</td>" +
+      "<td>" + (nm ? esc(nm) : '<span class="muted">' + t("dash") + "</span>") + "</td>" +
+      '<td class="num">' + (r.drops ? '<span class="pill dr">' + r.drops + "</span>" : t("dash")) + "</td>" +
+      "<td>" + (r.note ? esc(r.note) : '<span class="muted">' + t("okWord") + "</span>") + "</td>" +
       "</tr>";
   }
   el("rows").innerHTML = rows ||
-    '<tr><td colspan="10" class="empty">No requests yet. Point Claude Code at this proxy ' +
-    '(ANTHROPIC_BASE_URL=http://127.0.0.1:8181) and ask it something.</td></tr>';
+    '<tr><td colspan="10" class="empty">' + t("emptyTable") + "</td></tr>";
 
   // ---- errors ----
   var errs = s.errors || [];
   var eb = el("errbox");
   if (errs.length){
-    var h = '<h2>Recent errors</h2><div class="panel err">';
+    var eh = '<h2>' + t("secErrors") + '</h2><div class="panel err">';
     for (i = 0; i < errs.length; i++)
-      h += '<div style="padding:3px 0">#' + errs[i].n + " " + esc(errs[i].ts) +
-           ' <span class="pill no">' + errs[i].status + "</span> " + esc(errs[i].note) + "</div>";
-    eb.innerHTML = h + "</div>";
+      eh += '<div style="padding:3px 0">#' + errs[i].n + " " + esc(errs[i].ts) +
+            ' <span class="pill no">' + errs[i].status + "</span> " + esc(errs[i].note) + "</div>";
+    eb.innerHTML = eh + "</div>";
   } else {
     eb.innerHTML = "";
   }
@@ -367,12 +516,13 @@ function poll(){
     .catch(function(){ el("dot").className = "dot off"; });
 }
 
+el("lang").onclick = function(){ setLang(LANG === "en" ? "zh" : "en", true); };
 el("pause").onclick = function(){
   paused = !paused;
-  this.textContent = paused ? "Resume" : "Pause";
+  this.textContent = t(paused ? "resume" : "pause");
 };
 el("reset").onclick = function(){
-  if (!confirm("Reset all counters? The recent-requests list will be cleared too.")) return;
+  if (!confirm(t("confirmReset"))) return;
   fetch("/stats/reset", {method: "POST"}).then(poll);
 };
 
@@ -380,17 +530,17 @@ function loadKey(){
   fetch("/api/key", {cache: "no-store"})
     .then(function(r){ return r.json(); })
     .then(function(s){
-      el("keycur").textContent = s.key_set ? s.masked : "not set";
+      el("keycur").textContent = s.key_set ? s.masked : t("notSet");
       el("keypill").innerHTML = s.key_set
-        ? '<span class="pill ok">set</span>'
+        ? '<span class="pill ok">' + t("pillSet") + "</span>"
         : (s.passthrough
-            ? '<span class="pill dr">none &mdash; client-supplied keys in use</span>'
-            : '<span class="pill no">missing</span>');
+            ? '<span class="pill dr">' + t("pillClientNone") + "</span>"
+            : '<span class="pill no">' + t("pillMissing") + "</span>");
     });
 }
 el("keysave").onclick = function(){
   var v = el("keyin").value.trim();
-  if (!v){ el("keyhint").textContent = "Enter a key first."; return; }
+  if (!v){ el("keyhint").textContent = t("keyEnterFirst"); return; }
   this.disabled = true;
   fetch("/api/key", {method: "POST", headers: {"Content-Type": "application/json"},
                      body: JSON.stringify({api_key: v})})
@@ -398,16 +548,16 @@ el("keysave").onclick = function(){
     .then(function(res){
       el("keyin").value = "";
       el("keyhint").textContent = res.ok
-        ? (res.j.persisted ? "Saved to .env and applied -- survives restarts."
-                           : "Applied for this run only (.env is not writable here).")
-        : "Failed: " + (res.j.error || "unknown error");
+        ? (res.j.persisted ? t("keySaved") : t("keyTemp"))
+        : t("keyFailedPfx") + (res.j.error || res.j.status);
       loadKey(); poll();
     })
-    .catch(function(){ el("keyhint").textContent = "Request failed."; })
+    .catch(function(){ el("keyhint").textContent = t("keyReqFail"); })
     .finally(function(){ el("keysave").disabled = false; });
 };
-loadKey();
 
+applyStatic();
+loadKey();
 poll();
 setInterval(function(){
   tick++;

@@ -368,6 +368,7 @@ def stats_snapshot():
         "model": CONFIG.get("model"),
         "key_set": bool(CONFIG.get("api_key")),
         "client_key_passthrough": bool(FEATS.get("client_key_passthrough", True)),
+        "ui_lang": str(CONFIG.get("ui_lang") or "en"),
         "usage_baseline_tokens": int(FEATS.get("usage_baseline_tokens", 0) or 0),
         "max_history_chars": int(FEATS.get("max_history_chars", 0) or 0),
         "max_tool_result_chars": int(FEATS.get("max_tool_result_chars", 0) or 0),
