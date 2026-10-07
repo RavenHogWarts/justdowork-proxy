@@ -65,8 +65,9 @@ to bring one (they combine):
 Without compose:
 
 ```sh
-docker build -t ccproxy .
-docker run -d --name ccproxy -p 127.0.0.1:18181:8181 ccproxy
+docker build -t justdowork-proxy .
+docker run -d --name justdowork-proxy --restart unless-stopped \
+  -p 127.0.0.1:18181:8181 justdowork-proxy
 ```
 
 Or skip the clone entirely with the published image: GitHub Actions
@@ -75,7 +76,8 @@ builds an amd64 + arm64 image on every `v*` tag and pushes it to GHCR
 push):
 
 ```sh
-docker run -d --name ccproxy -p 127.0.0.1:18181:8181 \
+docker run -d --name justdowork-proxy --restart unless-stopped \
+  -p 127.0.0.1:18181:8181 \
   ghcr.io/ravenhogwarts/justdowork-proxy
 ```
 
@@ -300,14 +302,14 @@ then remove `"Edit": "edit"` from `native_tool_map` via a mounted
 `log()` mirrors every line to stdout, so:
 
 ```sh
-docker logs -f ccproxy
+docker logs -f justdowork-proxy
 ```
 
 shows the same content as `ccproxy_log.txt` would on a native install.
 To get the actual file out of a running container:
 
 ```sh
-docker cp ccproxy:/app/ccproxy_log.txt .
+docker cp justdowork-proxy:/app/ccproxy_log.txt .
 ```
 
 The file lives inside the container's writable layer and disappears with

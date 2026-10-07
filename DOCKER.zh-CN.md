@@ -237,7 +237,8 @@ curl -X POST http://127.0.0.1:18181/api/key \
 Dockerfile 可构建）。发布后在任何有 Docker 的机器上：
 
 ```sh
-docker run -d --name ccproxy -p 127.0.0.1:18181:8181 \
+docker run -d --name justdowork-proxy --restart unless-stopped \
+  -p 127.0.0.1:18181:8181 \
   ghcr.io/ravenhogwarts/justdowork-proxy
 ```
 
@@ -257,13 +258,13 @@ UI_LANG=zh docker compose up -d
 ### 看日志
 
 ```sh
-docker logs -f ccproxy
+docker logs -f justdowork-proxy
 ```
 
 与本地安装的 `ccproxy_log.txt` 内容一致。要取日志文件本身：
 
 ```sh
-docker cp ccproxy:/app/ccproxy_log.txt .
+docker cp justdowork-proxy:/app/ccproxy_log.txt .
 ```
 
 ### 停止 / 重启 / 升级
@@ -271,7 +272,7 @@ docker cp ccproxy:/app/ccproxy_log.txt .
 | 操作           | 命令                                                                 |
 | -------------- | -------------------------------------------------------------------- |
 | 停止并移除容器 | `docker compose down`                                                |
-| 重启           | `docker restart ccproxy`                                             |
+| 重启           | `docker restart justdowork-proxy`                                             |
 | 升级到新代码   | `git pull` 然后 `docker compose up -d --build`（依赖层有缓存，很快） |
 
 默认 `restart: unless-stopped`：宿主机重启或 Docker 服务重启后容器会自动恢复运行。
@@ -344,7 +345,7 @@ config.json 的 `native_tool_map` 里删掉 `"Edit": "edit"`，Edit 即改走
 
 ## 八、常见问题
 
-**容器反复退出，`docker logs ccproxy` 显示 `UPSTREAM_API_KEY is not set`**
+**容器反复退出，`docker logs justdowork-proxy` 显示 `UPSTREAM_API_KEY is not set`**
 默认不会发生（无密钥也能启动，进入客户端密钥模式）。该错误只在配置里
 关闭了 `client_key_passthrough` 且没有任何密钥时出现——设置密钥（cc-switch
 / dashboard / `.env`），或重新开启该开关，然后 `docker compose up -d`。

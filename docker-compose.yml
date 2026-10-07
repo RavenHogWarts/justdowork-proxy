@@ -15,8 +15,8 @@
 services:
   ccproxy:
     build: .
-    image: ccproxy
-    container_name: ccproxy
+    image: justdowork-proxy
+    container_name: justdowork-proxy
     restart: unless-stopped
     init: true                    # PID-1 signal handling / zombie reaping
     logging:
