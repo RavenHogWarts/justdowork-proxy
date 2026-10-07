@@ -10,6 +10,12 @@ __pycache__/
 # ccproxy's own output
 debug_dump/
 *.log
+# the proxy writes ccproxy_log.txt -- a .txt, so the `*.log` above does not
+# cover it -- and rotates it to ccproxy_log.txt.1. Neither belongs in the repo:
+# they hold your own session traffic.
+ccproxy_log.txt
+ccproxy_log.txt.*
+ccproxy_run.log
 
 # editors / OS
 .DS_Store

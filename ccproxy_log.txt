@@ -1,0 +1,45 @@
+[22:21:18] DROP tool_call (not in the client's tool list): SomethingElse
+[22:21:20] ===== REQ #1 | client_msgs=1 sent_msgs=1 dropped=0 | tools=2 | ~tok sys=335 tools=547 hist=1 | stream=False =====
+[22:21:20] upstream attempt 1 -> 200
+[22:21:20] REQ #1 OK in 0.0s | tool_use=False | stop=end_turn | usage={'input_tokens': 12345, 'output_tokens': 42}
+[22:21:20] REQ #1 called NO tool; the model said: done
+[22:21:20] ===== REQ #2 | client_msgs=1 sent_msgs=1 dropped=0 | tools=2 | ~tok sys=335 tools=547 hist=1 | stream=False =====
+[22:21:20] upstream attempt 1 -> 200
+[22:21:20] REQ #2 OK in 0.0s | tool_use=True | stop=tool_use | usage={'input_tokens': 12345, 'output_tokens': 42}
+[22:21:20] ===== REQ #3 | client_msgs=1 sent_msgs=1 dropped=0 | tools=2 | ~tok sys=335 tools=547 hist=1 | stream=False =====
+[22:21:20] upstream attempt 1 -> 200
+[22:21:20] SERVER TOOL  : WebSearch {"query": "flutter build error"}
+[22:21:20] upstream attempt 1 -> 200
+[22:21:20] REQ #3 OK in 0.0s | tool_use=False | stop=end_turn | usage={'input_tokens': 12345, 'output_tokens': 42}
+[22:21:20] REQ #3 called NO tool; the model said: According to the search, this error comes from X.
+[22:21:20] ===== REQ #4 | client_msgs=1 sent_msgs=1 dropped=0 | tools=2 | ~tok sys=335 tools=547 hist=1 | stream=True =====
+[22:21:20] upstream attempt 1 -> 200
+[22:21:20] stream OK in 0.0s | tool_use=False | stop=end_turn | usage={'input_tokens': 12345, 'output_tokens': 42}
+[22:21:20] stream called NO tool; the model said: The streaming answer is fine.
+[22:21:20] stats reset
+[22:21:20] ===== REQ #5 | client_msgs=601 sent_msgs=139 dropped=436 | tools=2 | ~tok sys=422 tools=547 hist=54817 | stream=False =====
+[22:21:20] upstream attempt 1 -> 200
+[22:21:20] REQ #5 OK in 0.0s | tool_use=False | stop=end_turn | usage={'input_tokens': 12345, 'output_tokens': 42}
+[22:21:20] REQ #5 called NO tool; the model said: done
+[22:21:20] ===== REQ #6 | client_msgs=1 sent_msgs=1 dropped=0 | tools=2 | ~tok sys=335 tools=547 hist=1 | stream=False =====
+[22:21:20] upstream attempt 1 -> 403 (empty body)
+[22:21:20] upstream attempt 2 -> 200
+[22:21:20] REQ #6 OK in 0.0s | tool_use=False | stop=end_turn | usage={'input_tokens': 12345, 'output_tokens': 42}
+[22:21:20] REQ #6 called NO tool; the model said: recovered
+[22:21:20] ===== REQ #7 | client_msgs=1 sent_msgs=1 dropped=0 | tools=2 | ~tok sys=335 tools=547 hist=1 | stream=False =====
+[22:21:20] upstream attempt 1 -> 503 (empty body)
+[22:21:20] upstream attempt 2 -> 403 (empty body)
+[22:21:20] upstream attempt 3 -> 200
+[22:21:20] REQ #7 OK in 0.3s | tool_use=False | stop=end_turn | usage={'input_tokens': 12345, 'output_tokens': 42}
+[22:21:20] REQ #7 called NO tool; the model said: third time
+[22:21:20] ===== REQ #8 | client_msgs=1 sent_msgs=1 dropped=0 | tools=2 | ~tok sys=335 tools=547 hist=1 | stream=False =====
+[22:21:20] upstream attempt 1 -> 401 (empty body)
+[22:21:20] REQ #8 FAIL 401: upstream returned an empty body
+[22:21:20] ===== REQ #9 | client_msgs=1 sent_msgs=1 dropped=0 | tools=2 | ~tok sys=335 tools=547 hist=1 | stream=False =====
+[22:21:20] upstream attempt 1 -> 200
+[22:21:20] SERVER TOOL  : WebSearch {"query": "alpha"}
+[22:21:20] SERVER TOOL  : WebSearch {"query": "beta"}
+[22:21:20] SERVER TOOL  : WebSearch {"query": "gamma"}
+[22:21:21] upstream attempt 1 -> 200
+[22:21:21] REQ #9 OK in 0.3s | tool_use=False | stop=end_turn | usage={'input_tokens': 12345, 'output_tokens': 42}
+[22:21:21] REQ #9 called NO tool; the model said: all done
