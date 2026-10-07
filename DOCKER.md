@@ -58,8 +58,10 @@ to bring one (they combine):
    [Using cc-switch](#using-cc-switch-provider-switcher).
 2. **Dashboard** — open <http://127.0.0.1:18181/>, save a key in the
    **API key** panel at the bottom; applies immediately and persists.
-3. **Optional `.env` file** — for a file-based fallback key that
-   survives container re-creation. See
+3. **Optional `.env` file** — only to *seed* a fallback key before the
+   first start, or for compose variable substitution. A key you save in
+   the dashboard already persists via the `/app/data` volume. See
+   [Data persistence](#data-persistence) and
    [The optional .env](#the-optional-env).
 
 Without compose:
@@ -144,8 +146,8 @@ the image) only if you want either of:
    TARGET_URL=https://another-relay
    ```
 
-2. **A fallback key that survives container re-creation** — put the key
-   in the file and mount it (the file must exist first):
+2. **A fallback key set before first start** — put the key in the file
+   and mount it into the data dir (the folder is created for you):
 
    ```ini
    UPSTREAM_API_KEY=sk-...
@@ -153,8 +155,12 @@ the image) only if you want either of:
 
    ```yaml
        volumes:
-         - ./.env:/app/.env
+         - ./.env:/app/data/.env
    ```
+
+   This is only needed to seed a key *before* you ever open the
+   dashboard; once you save a key there it is written into the
+   `/app/data` volume anyway (see [Data persistence](#data-persistence)).
 
 Precedence inside ccproxy: real environment variables > `.env` >
 `config.json`.
@@ -188,9 +194,10 @@ the bottom shows the masked fallback key (or a "client-supplied keys in
 use" tag) and lets you save one:
 
 * it applies **immediately**, no restart
-* persistence: a `docker restart` keeps it; a re-creation
-  (`docker compose up -d --build` / `down` + `up`) loses it — mount an
-  `.env` if that matters, or just save it again
+* persistence: the saved key is written to `.env` inside the `/app/data`
+  volume, so it now survives both a `docker restart` **and** a
+  re-creation (`docker compose up -d --build` / `down` + `up`). See
+  [Data persistence](#data-persistence).
 * without any fallback key the proxy runs in client-key mode (cc-switch
   supplies the key per request)
 
@@ -309,14 +316,93 @@ shows the same content as `ccproxy_log.txt` would on a native install.
 To get the actual file out of a running container:
 
 ```sh
-docker cp justdowork-proxy:/app/ccproxy_log.txt .
+docker cp justdowork-proxy:/app/data/ccproxy_log.txt .
 ```
 
-The file lives inside the container's writable layer and disappears with
-it, which is fine for a personal proxy — stdout has everything. If you
-enable `dump_requests: true`, the same applies to `debug_dump/`
-(use `docker cp` before removing the container, or mount a volume over
-`/app/debug_dump`).
+The file lives in the `/app/data` volume (see
+[Data persistence](#data-persistence)), so it survives container
+re-creation. If you enable `dump_requests: true`, the dumps go to
+`/app/data/debug_dump/` in the same volume.
+
+---
+
+## Data persistence
+
+ccproxy keeps its mutable runtime data in one directory,
+`CCPROXY_DATA_DIR` (the image sets it to `/app/data`):
+
+| file | what it is |
+|---|---|
+| `.env` | the fallback API key saved from the dashboard |
+| `ccproxy_log.txt` (+ `.1`) | the request log, rotated at ~2 MB |
+| `debug_dump/` | request dumps, only when `dump_requests: true` |
+
+`config.json` is **not** here — it is read-only, baked next to the code
+at `/app`, and overridden by environment variables.
+
+**compose** mounts a named volume `ccproxy-data` over `/app/data`, so
+everything above persists across `up --build`, `down` + `up`, and
+upgrades. Inspect or back it up:
+
+```sh
+docker volume inspect justdowork-proxy_ccproxy-data   # where it lives on the host
+docker run --rm -v justdowork-proxy_ccproxy-data:/d -v "$PWD":/out \
+  busybox tar czf /out/ccproxy-data.tgz -C /d .       # back it up
+```
+
+**plain `docker run`**: the `Dockerfile` declares `VOLUME /app/data`, so
+even without `-v` Docker persists it to an anonymous volume. To put it
+somewhere you choose, mount your own:
+
+```sh
+docker run -d --name justdowork-proxy --restart unless-stopped \
+  -p 127.0.0.1:18181:8181 \
+  -v ccproxy-data:/app/data \
+  ghcr.io/ravenhogwarts/justdowork-proxy
+```
+
+### Putting the data on another drive (Windows)
+
+Yes — the data directory can live anywhere, including another drive.
+The clean way is a **named volume with a custom location**, which avoids
+the uid-mismatch problems a Windows bind-mount can cause:
+
+```sh
+docker volume create --driver local \
+  --opt type=none --opt o=bind \
+  --opt device=D:/docker-data/ccproxy \
+  ccproxy-data
+```
+
+then run compose as usual (it reuses the existing `ccproxy-data` volume).
+A direct **bind mount** also works if you prefer a plain folder:
+
+```sh
+docker run -d --name justdowork-proxy --restart unless-stopped \
+  -p 127.0.0.1:18181:8181 \
+  -v D:/docker-data/ccproxy:/app/data \
+  ghcr.io/ravenhogwarts/justdowork-proxy
+```
+
+or in compose, replace the named volume with the host path:
+
+```yaml
+    volumes:
+      - D:/docker-data/ccproxy:/app/data
+```
+
+Notes for Windows:
+
+* On **Docker Desktop (WSL2)** the drive must be shared with Docker
+  (Settings → Resources → File sharing, or it just works under WSL2 for
+  most paths). Use forward slashes: `D:/docker-data/ccproxy`.
+* The container runs as uid 1000. Named volumes get the right ownership
+  automatically; a **bind mount** to an NTFS folder is presented through
+  the WSL2 layer and is normally world-writable, so the saved key still
+  persists. If a bind mount ever shows `could not persist ... to .env`
+  in the log, switch to the named-volume-with-`device` form above.
+* The folder is created on first run; you don't need to pre-create the
+  `.env` file (unlike the old single-file mount).
 
 ---
 
@@ -328,9 +414,9 @@ enable `dump_requests: true`, the same applies to `debug_dump/`
   default `restart: unless-stopped`, the proxy also comes back after a
   reboot / Docker daemon restart.
 * To upgrade: `git pull`, `docker compose up -d --build` — only the code
-  layers rebuild; the dependency layer is cached. Note this re-creates
-  the container, so a dashboard-saved fallback key is lost (cc-switch
-  mode is unaffected) — save it again or mount an `.env`.
+  layers rebuild; the dependency layer is cached. The `/app/data` volume
+  persists across the re-creation, so the dashboard-saved fallback key is
+  kept (see [Data persistence](#data-persistence)).
 
 ---
 
@@ -340,8 +426,8 @@ enable `dump_requests: true`, the same applies to `debug_dump/`
 * Served by **waitress** (production WSGI); falls back to Flask's dev
   server when missing (`CCPROXY_SERVER=flask` forces the fallback);
   SSE events flush immediately
-* Runs as a dedicated non-root `ccproxy` user; `/app` is chowned to it
-  because ccproxy writes its log (and dumps) next to itself
+* Runs as a dedicated non-root `ccproxy` user; runtime data goes to the
+  `/app/data` volume (chowned to that user), kept separate from the code
 * Only `ccproxy.py`, `dashboard.py`, `config.json`, `requirements.txt`
   and the license/README are copied in — tests, probes, host-side start
   scripts stay out (see `.dockerignore`)

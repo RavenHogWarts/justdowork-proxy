@@ -20,7 +20,8 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     LISTEN_HOST=0.0.0.0 \
-    PORT=8181
+    PORT=8181 \
+    CCPROXY_DATA_DIR=/app/data
 
 WORKDIR /app
 
@@ -33,11 +34,18 @@ RUN pip install --no-cache-dir -r requirements.txt waitress
 COPY LICENSE README.md ./
 COPY ccproxy.py dashboard.py config.json ./
 
-# ccproxy writes ccproxy_log.txt (and debug_dump/ when enabled) next to
-# itself, so /app must be writable by the runtime user
+# ccproxy writes its runtime data (the saved fallback key in .env, the
+# request log, and debug_dump/) into CCPROXY_DATA_DIR = /app/data. Keeping
+# it separate from the code lets a volume persist it across re-creations
+# without masking the app. Make both owned by the runtime user.
 RUN useradd --system --create-home --uid 1000 ccproxy \
+    && mkdir -p /app/data \
     && chown -R ccproxy:ccproxy /app
 USER ccproxy
+
+# declare the data dir as a volume so `docker run` without an explicit mount
+# still persists to an anonymous volume rather than the container layer
+VOLUME ["/app/data"]
 
 EXPOSE 8181
 

@@ -35,7 +35,11 @@ services:
       UI_LANG: "${UI_LANG:-}"
       # optional access token for anything beyond loopback (see DOCKER.md)
       CCPROXY_TOKEN: "${CCPROXY_TOKEN:-}"
-    # Optional: mount an .env file to persist a fallback key across
-    # container REcreations (a plain `docker restart` already keeps it):
-    # volumes:
-    #   - ./.env:/app/.env
+    # Runtime data (the dashboard-saved fallback key in .env, the request log
+    # and debug_dump/) lives in /app/data. The named volume below keeps it
+    # across `up --build` / `down` + `up`, not just a plain `docker restart`.
+    volumes:
+      - ccproxy-data:/app/data
+
+volumes:
+  ccproxy-data:

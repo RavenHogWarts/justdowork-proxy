@@ -275,7 +275,7 @@ check("recent rows record which key source served them",
 print("\n=== 6. keyless mode + /api/key ===")
 
 saved_key = ccproxy.CONFIG["api_key"]
-saved_here = ccproxy.HERE
+saved_env_path = ccproxy.ENV_PATH
 tmpdir = tempfile.mkdtemp(prefix="ccproxy-branch-test-")
 try:
     ccproxy.CONFIG["api_key"] = ""
@@ -283,9 +283,9 @@ try:
     check("/api/key GET in keyless mode: key_set false, passthrough true",
           k.get("key_set") is False and k.get("passthrough") is True, str(k))
 
-    ccproxy.HERE = tmpdir            # .env writeback + log go to the temp dir
-    r = requests.post(PROXY + "/api/key", json={"api_key": "sk-set-via-api"}, timeout=30).json()
     env_file = os.path.join(tmpdir, ".env")
+    ccproxy.ENV_PATH = env_file       # .env writeback goes to the temp dir
+    r = requests.post(PROXY + "/api/key", json={"api_key": "sk-set-via-api"}, timeout=30).json()
     check("/api/key POST: applied + persisted to .env",
           r.get("ok") and r.get("persisted") and
           open(env_file, encoding="utf-8").read().strip().endswith("sk-set-via-api"))
@@ -300,7 +300,7 @@ try:
           r.status_code == 200 and SEEN_KEYS[mark:] == ["dummy", "sk-set-via-api"],
           f"seen={SEEN_KEYS[mark:]}")
 finally:
-    ccproxy.HERE = saved_here
+    ccproxy.ENV_PATH = saved_env_path
     ccproxy.CONFIG["api_key"] = saved_key
     shutil.rmtree(tmpdir, ignore_errors=True)
 

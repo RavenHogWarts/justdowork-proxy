@@ -72,6 +72,18 @@ except Exception as _dash_err:          # if it breaks, the proxy still runs
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 
+# Mutable runtime data (the saved fallback key in .env, the request log, and
+# debug_dump/) lives in DATA_DIR. It defaults to HERE, so a plain local run is
+# unchanged; set CCPROXY_DATA_DIR to a mounted volume to persist across
+# container re-creations. config.json stays next to the code (read-only).
+DATA_DIR = os.environ.get("CCPROXY_DATA_DIR", "").strip() or HERE
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except Exception as e:
+    print(f"[data] could not create data dir {DATA_DIR}: {e} -- falling back to {HERE}")
+    DATA_DIR = HERE
+ENV_PATH = os.path.join(DATA_DIR, ".env")
+
 # --------------------------------------------------------------------------- #
 # Config
 # --------------------------------------------------------------------------- #
@@ -148,10 +160,10 @@ def _deep_merge(base, over):
 
 
 def _load_dotenv(path=None):
-    """Read KEY=VALUE lines from a .env next to ccproxy.py. The file only
+    """Read KEY=VALUE lines from a .env in DATA_DIR. The file only
     fills in variables that are not already in the environment, so a real
     export still wins. Lets local and docker runs share one key file."""
-    p = path or os.path.join(HERE, ".env")
+    p = path or ENV_PATH
     if not os.path.isfile(p):
         return
     try:
@@ -170,11 +182,11 @@ def _load_dotenv(path=None):
 
 
 def _persist_env_value(name, value):
-    """Update one KEY=VALUE line in the .env next to ccproxy.py, so a key
+    """Update one KEY=VALUE line in the .env inside DATA_DIR, so a key
     changed from the dashboard survives a restart. Returns False when the
     file can't be written (read-only mount, no permission): the change
     then lives in memory only."""
-    path = os.path.join(HERE, ".env")
+    path = ENV_PATH
     new_line = f"{name}={value}"
     try:
         lines = []
@@ -380,11 +392,11 @@ def stats_snapshot():
         recent = list(STATS["recent"])
         errors = list(STATS["errors"])
         started = STATS["started"]
-    dump_bytes, dump_files = _dir_bytes(os.path.join(HERE, "debug_dump"))
+    dump_bytes, dump_files = _dir_bytes(os.path.join(DATA_DIR, "debug_dump"))
     log_bytes = 0
     for name in ("ccproxy_log.txt", "ccproxy_log.txt.1"):
         try:
-            log_bytes += os.path.getsize(os.path.join(HERE, name))
+            log_bytes += os.path.getsize(os.path.join(DATA_DIR, name))
         except Exception:
             pass
     with _COUNT_LOCK:
@@ -416,7 +428,7 @@ def log(msg):
     line = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
     print(line, flush=True)
     try:
-        path = os.path.join(HERE, "ccproxy_log.txt")
+        path = os.path.join(DATA_DIR, "ccproxy_log.txt")
         with LOG_LOCK:
             if os.path.exists(path) and os.path.getsize(path) > int(FEATS.get("log_max_bytes", 2_000_000)):
                 os.replace(path, path + ".1")
@@ -1885,7 +1897,7 @@ def dump_request(n, obj):
     if not FEATS.get("dump_requests", False):
         return
     try:
-        d = os.path.join(HERE, "debug_dump")
+        d = os.path.join(DATA_DIR, "debug_dump")
         os.makedirs(d, exist_ok=True)
         with DUMP_LOCK:
             with open(os.path.join(d, f"req_{n}.json"), "w", encoding="utf-8") as f:

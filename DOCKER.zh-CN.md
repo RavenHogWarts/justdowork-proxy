@@ -78,8 +78,9 @@ curl http://127.0.0.1:18181/health
    [四、与 cc-switch 配合使用](#四与-cc-switch-配合使用)。
 2. **dashboard 面板**：打开 <http://127.0.0.1:18181/>，页面底部 **API key**
    面板保存一个密钥，立即生效并自动持久化，作为后备密钥。
-3. **可选的 `.env` 文件**：见[六、可选的 .env](#六可选的-env)，适合想把
-   后备密钥放进文件、且希望重建容器后也不丢的场景。
+3. **可选的 `.env` 文件**：仅用于首次启动前*预置*后备密钥，或供 compose
+   变量替换。在 dashboard 保存的密钥已通过 `/app/data` 卷持久化。见
+   [数据持久化](#数据持久化)与[六、可选的 .env](#六可选的-env)。
 
 ---
 
@@ -154,9 +155,9 @@ cc-switch 配置的真实密钥，由 cc-switch 统一管理所有供应商的�
 **纯 cc-switch 模式**：完全可以不设任何后备密钥——ccproxy 允许无密钥启动，
 此时上游调用完全依赖客户端带来的密钥；dashboard 顶部的 key 状态会显示
 `client-supplied`，API key 面板显示"未设置后备密钥"。要恢复后备，随时在该
-面板保存一个即可。注意：面板保存的密钥写在容器内，`docker restart` 会保留，
-但**重建容器**（`docker compose up -d --build` / `down` + `up`）会丢失——
-若要重建后也不丢，挂载一个 `.env` 文件（见[六](#六可选的-env)）。
+面板保存一个即可。注意：面板保存的密钥写入 `/app/data` 卷里的 `.env`，
+`docker restart` 与**重建容器**（`docker compose up -d --build` / `down` +
+`up`）都会保留（见[数据持久化](#数据持久化)）。
 
 **前提：`ENABLE_TOOL_SEARCH=false` 必须设置。** 这是 ccproxy 的硬性要求；
 `run-claude` 脚本会设它，但走 cc-switch 时没有这层包装，请把它写进
@@ -198,8 +199,9 @@ Claude Code 全局配置的 `env` 块——一次性设置，cc-switch 切换供
 1. 显示当前后备密钥（掩码，如 `sk-abc...wxyz`）；未设置时显示客户端密钥
    模式标签
 2. 在输入框粘贴新密钥，点 **Save key**
-3. **立即生效，无需重启**。持久化范围：`docker restart` 保留；重建容器
-   （`up -d --build` / `down` + `up`）会丢，除非挂载了 `.env`
+3. **立即生效，无需重启**。持久化：密钥写入 `/app/data` 卷里的 `.env`，
+   `docker restart` 与重建容器（`up -d --build` / `down` + `up`）都会保留
+   （见[数据持久化](#数据持久化)）
 
 也可用命令行：
 
@@ -264,8 +266,82 @@ docker logs -f justdowork-proxy
 与本地安装的 `ccproxy_log.txt` 内容一致。要取日志文件本身：
 
 ```sh
-docker cp justdowork-proxy:/app/ccproxy_log.txt .
+docker cp justdowork-proxy:/app/data/ccproxy_log.txt .
 ```
+
+日志保存在 `/app/data` 卷中（见[数据持久化](#数据持久化)），重建容器后依然
+保留。若开启 `dump_requests: true`，转储写入同一卷的 `/app/data/debug_dump/`。
+
+### 数据持久化
+
+ccproxy 把运行时可变数据集中放在一个目录 `CCPROXY_DATA_DIR`（镜像里设为
+`/app/data`）：
+
+| 文件 | 含义 |
+|---|---|
+| `.env` | dashboard 保存的后备 API 密钥 |
+| `ccproxy_log.txt`（+ `.1`） | 请求日志，约 2 MB 轮转 |
+| `debug_dump/` | 请求转储，仅在 `dump_requests: true` 时产生 |
+
+`config.json` **不在**这里——它是只读的，和代码一起打包在 `/app`，并且会被
+环境变量覆盖。
+
+**compose** 用命名卷 `ccproxy-data` 挂到 `/app/data`，因此上述内容在
+`up --build`、`down` + `up`、升级后都保留。查看或备份：
+
+```sh
+docker volume inspect justdowork-proxy_ccproxy-data   # 查看它在宿主机上的位置
+docker run --rm -v justdowork-proxy_ccproxy-data:/d -v "$PWD":/out \
+  busybox tar czf /out/ccproxy-data.tgz -C /d .       # 备份
+```
+
+**纯 `docker run`**：`Dockerfile` 声明了 `VOLUME /app/data`，即使不加 `-v`，
+Docker 也会用匿名卷持久化。想自己指定位置就显式挂载：
+
+```sh
+docker run -d --name justdowork-proxy --restart unless-stopped \
+  -p 127.0.0.1:18181:8181 \
+  -v ccproxy-data:/app/data \
+  ghcr.io/ravenhogwarts/justdowork-proxy
+```
+
+#### 把数据放到其他盘（Windows）
+
+可以——数据目录可以放在任意位置，包括另一个盘。推荐用**指定位置的命名卷**，
+它能规避 Windows bind mount 常见的 uid 不匹配问题：
+
+```sh
+docker volume create --driver local \
+  --opt type=none --opt o=bind \
+  --opt device=D:/docker-data/ccproxy \
+  ccproxy-data
+```
+
+然后照常 `docker compose up -d`（会复用已存在的 `ccproxy-data` 卷）。
+若你更想用一个普通文件夹，直接 **bind mount** 也行：
+
+```sh
+docker run -d --name justdowork-proxy --restart unless-stopped \
+  -p 127.0.0.1:18181:8181 \
+  -v D:/docker-data/ccproxy:/app/data \
+  ghcr.io/ravenhogwarts/justdowork-proxy
+```
+
+或在 compose 里把命名卷换成宿主路径：
+
+```yaml
+    volumes:
+      - D:/docker-data/ccproxy:/app/data
+```
+
+Windows 注意事项：
+
+* **Docker Desktop（WSL2）** 下该盘需对 Docker 开放共享（设置 → Resources →
+  File sharing；WSL2 下多数路径默认即可）。路径用正斜杠：`D:/docker-data/ccproxy`。
+* 容器以 uid 1000 运行。命名卷会自动设置好属主；bind mount 到 NTFS 文件夹时，
+  经 WSL2 层通常是全局可写，密钥仍能持久化。若日志里出现
+  `could not persist ... to .env`，改用上面带 `device` 的命名卷方式。
+* 文件夹会在首次运行时自动创建，无需像旧的单文件挂载那样预先建好 `.env`。
 
 ### 停止 / 重启 / 升级
 
@@ -277,8 +353,8 @@ docker cp justdowork-proxy:/app/ccproxy_log.txt .
 
 默认 `restart: unless-stopped`：宿主机重启或 Docker 服务重启后容器会自动恢复运行。
 
-> 升级属于"重建容器"：dashboard 里保存的后备密钥会随之丢失（cc-switch 模式
-> 不受影响），重新保存一次或挂载 `.env` 即可。
+> 升级会重建容器，但 `/app/data` 卷不受影响：dashboard 里保存的后备密钥会
+> 保留（见[数据持久化](#数据持久化)）。
 
 ---
 
@@ -305,8 +381,8 @@ docker cp justdowork-proxy:/app/ccproxy_log.txt .
    TARGET_URL=https://另一个中转站
    ```
 
-2. **还要后备密钥且重建容器不丢**：在 `.env` 写入密钥，并在
-   `docker-compose.yml` 里恢复挂载（文件必须先存在）：
+2. **首次启动前预置后备密钥**：在 `.env` 写入密钥，并挂载进数据目录
+   （文件夹会自动创建）：
 
    ```ini
    UPSTREAM_API_KEY=sk-你的密钥
@@ -314,8 +390,11 @@ docker cp justdowork-proxy:/app/ccproxy_log.txt .
 
    ```yaml
        volumes:
-         - ./.env:/app/.env
+         - ./.env:/app/data/.env
    ```
+
+   这仅用于在你首次打开 dashboard *之前*就有一个密钥；一旦在面板里保存，
+   密钥本就会写入 `/app/data` 卷（见[数据持久化](#数据持久化)）。
 
 优先级：真实环境变量 > `.env` > `config.json`。
 
@@ -358,8 +437,9 @@ config.json 的 `native_tool_map` 里删掉 `"Edit": "edit"`，Edit 即改走
 （或该中转站已作废它），去中转站控制台核对；同时确认有后备密钥时它也有效。
 
 **`docker compose up` 报错提到 bind mount / `.env` 路径**
-只有在你自己恢复了 `.env` 挂载、而文件又不存在时才会发生——先创建 `.env`
-再 `up`。
+只有在你自己把 `.env` 作为单文件挂载（`- ./.env:/app/data/.env`）、而文件
+又不存在时才会发生——先创建 `.env` 再 `up`。默认的命名卷用法不需要预建任何
+文件。
 
 **Windows 上没有 curl**
 直接用浏览器打开 <http://127.0.0.1:18181/health>，看到 JSON 即正常。
@@ -400,8 +480,8 @@ docker compose up -d --build
 * 基础镜像 `python:3.12-slim`（ccproxy 支持 3.9+）
 * 以 **waitress**（生产级 WSGI 服务器）服务，未安装时自动回退 Flask 开发
   服务器（`CCPROXY_SERVER=flask` 可强制回退）；SSE 每事件即发
-* 以专用非 root 用户 `ccproxy` 运行；`/app` 目录归属该用户（ccproxy
-  会在自身目录写日志与调试转储）
+* 以专用非 root 用户 `ccproxy` 运行；运行时数据写入 `/app/data` 卷
+  （归属该用户），与代码分离
 * 只复制 `ccproxy.py`、`dashboard.py`、`config.json`、`requirements.txt`
   与许可/README 进镜像——测试、探针、宿主机脚本均不进入
 * ccproxy 自行处理 `SIGTERM`，`docker stop` 可干净退出
