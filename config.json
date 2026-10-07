@@ -22,13 +22,22 @@
     "max_history_chars": 220000,
     "max_history_messages": 0,
     "keep_first_user_message": true,
-    "max_tool_result_chars": 4000,
+    "keep_recent_messages": 24,
+    "history_user_reserve": 0.35,
+    "max_tool_result_chars": 32000,
     "max_output_tokens": 16000,
     "cache_system_prefix": true,
 
+    "working_rules": true,
     "strip_thinking": true,
     "enforce_stop_sequences": true,
     "usage_baseline_tokens": 0,
+
+    "thinking_enabled": true,
+    "thinking_adaptive": true,
+    "thinking_budget_tokens": 2000,
+    "thinking_max_budget_tokens": 8000,
+
     "upstream_retries": 2,
 
     "server_tools_enabled": true,
