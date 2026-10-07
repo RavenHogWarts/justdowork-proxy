@@ -110,6 +110,9 @@ DEFAULT_CONFIG = {
         "strip_thinking": True,
         "enforce_stop_sequences": True,
         "usage_baseline_tokens": 0,     # set to 10380 to hide the relay's ~10.4k phantom tokens
+        "usage_sanitize": True,         # detect & undo the relay's inflated usage (cache
+                                        # double-counts, phantom blocks) using the payload
+                                        # size we actually sent as the tiebreaker
         "upstream_retries": 2,          # every retry costs money, so do not raise this much
         "upstream_retry_status": [429, 502, 503, 504],
                                         # which upstream statuses are worth a retry. Narrow on
@@ -512,6 +515,31 @@ def _extract_balanced_json(s):
     return None
 
 
+def _recoverable_prefixes(text, limit=24):
+    """Prefixes of a truncated JSON body that end where a value could have
+    finished (a closing quote or bracket), longest first. Only CLOSING quotes
+    count as a cut: cutting at an opening quote would fabricate a shorter
+    value that never existed -- a three-option list silently becoming a
+    one-option one."""
+    cuts = []
+    in_str = esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+                cuts.append(i + 1)
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "}]":
+            cuts.append(i + 1)
+    return [text[:c] for c in cuts[-limit:][::-1]]
+
+
 def loads_tool_json(raw):
     """The JSON inside a tool call, with the 4-step repair. Returns a dict or None."""
     if not raw or not raw.strip():
@@ -524,6 +552,15 @@ def loads_tool_json(raw):
         ext = _extract_balanced_json(src)
         if ext and ext not in candidates:
             candidates.append(ext)
+    # truncated body: the closers above land at the END of the text, past any
+    # trailing prose, and a cut mid-value closes into a key with no value.
+    # Try closing progressively shorter prefixes -- each cut point is a place
+    # a value had finished, so the salvage keeps only what was really written.
+    for src in (raw, repaired):
+        for pref in _recoverable_prefixes(src.strip()):
+            closed = _extract_balanced_json(pref)
+            if closed and closed not in candidates:
+                candidates.append(closed)
     for cand in candidates:
         try:
             obj = json.loads(cand)
@@ -599,12 +636,47 @@ def _tool_input_from(obj, tag_name):
     return obj if tag_name else None
 
 
-def parse_assistant_text(text, valid_names=None, strict=True, log_drops=True):
+def _backfill_required(arguments, schema):
+    r"""Fill required string fields in array items from a present sibling field.
+    The relay sometimes emits calls that omit a required field the client's
+    schema demands (measured: TodoWrite todos without activeForm); the client
+    rejects such calls outright. Values are COPIED from a sibling on the same
+    row (content/label/name preferred) -- nothing is invented. Returns the
+    number of fields filled."""
+    filled = 0
+    for key, prop in ((schema or {}).get("properties") or {}).items():
+        if (prop or {}).get("type") != "array":
+            continue
+        items = prop.get("items") or {}
+        req = items.get("required") or []
+        item_props = items.get("properties") or {}
+        rows = arguments.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            source = (row.get("content") or row.get("label") or row.get("name")
+                      or next((v for v in row.values() if isinstance(v, str)), None))
+            for field in req:
+                if field in row:
+                    continue
+                if (item_props.get(field) or {}).get("type") != "string":
+                    continue
+                if source is not None:
+                    row[field] = source
+                    filled += 1
+    return filled
+
+
+def parse_assistant_text(text, valid_names=None, strict=True, log_drops=True, schemas=None):
     """Split the model's text into Anthropic blocks (text + tool_use).
 
     Supports: <tool_call name="X">{...}</tool_call> (closing tag optional),
               <tool_call>{...}</tool_call>, native <invoke><parameter> XML,
               and bare JSON {"name":..,"input":..} as a last resort.
+    schemas: optional {tool_name: input_schema}; used to backfill required
+              fields the relay omitted from array items.
     """
     if not text:
         return [{"type": "text", "text": ""}]
@@ -619,6 +691,10 @@ def parse_assistant_text(text, valid_names=None, strict=True, log_drops=True):
                 bump("drops")
                 log(f"DROP tool_call (not in the client's tool list): {name}")
             return
+        if schemas and name in schemas:
+            n = _backfill_required(inp, schemas.get(name))
+            if n:
+                log(f"backfilled {n} required field(s) the relay omitted: {name}")
         spans.append((start, end, name, inp))
 
     # --- (A) <tool_call name="X"> ... ---
@@ -1591,7 +1667,49 @@ def apply_stop_sequences(text, stops):
     return text, None
 
 
-def process_upstream(upstream, client_req, feats, valid_names):
+def _sanitize_usage(usage, payload_chars):
+    r"""Undo this relay's inflated token accounting so the client's context
+    math stays true. Returns (usage, changed). Two measured failure modes:
+
+    1. double count: input_tokens reports the whole prompt AND repeats it in
+       the cache fields -- clients compute input + cache_read + cache_creation,
+       so the prompt counts twice (a 374k prompt once reached the client as
+       1.49M and wedged it into a compact loop).
+    2. phantom block: no cache fields, input_tokens inflated by a fixed ~10.4k
+       on top of a small prompt (measured: 11.8k claimed for a ~2KB payload).
+
+    The tiebreaker for both is the one thing the relay cannot fake: the size
+    of the payload we actually sent. Nothing textual packs tighter than 8
+    bytes per token (this backend measures ~3.3). A context that genuinely
+    outgrew the window passes through untouched -- hiding it would strand
+    the session instead of letting the client compact."""
+    it = int(usage.get("input_tokens") or 0)
+    cc = int(usage.get("cache_creation_input_tokens") or 0)
+    cr = int(usage.get("cache_read_input_tokens") or 0)
+    out = int(usage.get("output_tokens") or 0)
+    cache_sum = cc + cr
+    floor = max(1, payload_chars // 8)
+    est = max(1, int(payload_chars / 3.3))
+    if cache_sum > 0 and 0 <= it - cache_sum <= max(32, 0.001 * it):
+        # input_tokens carried the whole prompt: the uncached tail is the
+        # residual, and the cache figure is byte-checked BOTH ways: below
+        # bytes/8 is a broken number, above one-token-per-byte is the phantom
+        # block relocated into the cache field (measured 2026-10-07: cc=10955
+        # claimed for a ~2KB payload). A denser-but-plausible figure (this
+        # backend genuinely runs ~1.2 bytes/token) is left alone.
+        residual = max(it - cache_sum, 0)
+        total = cc if floor <= cc <= payload_chars else est
+        log(f"usage fix (cache double-count): in={it} cc={cc} cr={cr} "
+            f"-> in={residual} cc={total}")
+        return {"input_tokens": residual, "cache_creation_input_tokens": total,
+                "cache_read_input_tokens": 0, "output_tokens": out}, True
+    if cache_sum == 0 and it > max(floor * 4, est * 3, 2000):
+        log(f"usage fix (phantom block): in={it} -> {est} (payload was {payload_chars} chars)")
+        return {"input_tokens": est, "output_tokens": out}, True
+    return usage, False
+
+
+def process_upstream(upstream, client_req, feats, valid_names, payload_chars=0):
     text_segs, native = [], []
     for b in (upstream.get("content") or []):
         if not isinstance(b, dict):
@@ -1612,7 +1730,10 @@ def process_upstream(upstream, client_req, feats, valid_names):
 
     strict = bool(feats.get("strict_tool_names", True)) and bool(valid_names)
     if client_req.get("tools"):
-        parsed = parse_assistant_text(text, valid_names=valid_names, strict=strict)
+        schemas = {t.get("name"): t.get("input_schema") or {}
+                   for t in client_req["tools"] if isinstance(t, dict)}
+        parsed = parse_assistant_text(text, valid_names=valid_names, strict=strict,
+                                      schemas=schemas)
     else:
         parsed = [{"type": "text", "text": text}] if text else []
 
@@ -1641,11 +1762,19 @@ def process_upstream(upstream, client_req, feats, valid_names):
     if stop_val is not None:
         stop_reason = "stop_sequence"
 
-    usage = upstream.get("usage") or {}
+    usage = dict(upstream.get("usage") or {})
+    fixed = False
+    if feats.get("usage_sanitize", True) and payload_chars:
+        usage, fixed = _sanitize_usage(usage, int(payload_chars))
     base = int(feats.get("usage_baseline_tokens", 0) or 0)
     in_tok = int(usage.get("input_tokens", 0) or 0)
-    if base > 0 and in_tok >= base:
+    if not fixed and base > 0 and in_tok >= base:
         in_tok -= base
+    client_usage = {"input_tokens": max(0, in_tok),
+                    "output_tokens": int(usage.get("output_tokens", 0) or 0)}
+    for k in ("cache_creation_input_tokens", "cache_read_input_tokens"):
+        if k in usage:
+            client_usage[k] = usage[k]
 
     return {
         "id": upstream.get("id") or ("msg_" + uuid.uuid4().hex[:16]),
@@ -1655,8 +1784,7 @@ def process_upstream(upstream, client_req, feats, valid_names):
         "content": content,
         "stop_reason": stop_reason,
         "stop_sequence": stop_val,
-        "usage": {"input_tokens": max(0, in_tok),
-                  "output_tokens": int(usage.get("output_tokens", 0) or 0)},
+        "usage": client_usage,
     }, has_tool
 
 
@@ -1803,7 +1931,8 @@ def v1_messages():
             "message": f"Upstream {status}: {msg}"}}),
             status=status, content_type="application/json")
 
-    message, has_tool = process_upstream(upstream, body, FEATS, valid_names)
+    message, has_tool = process_upstream(upstream, body, FEATS, valid_names,
+                                         payload_chars=int(ctx.get("payload_chars", 0) or 0))
     log(f"REQ #{n} OK in {round(time.time() - t0, 1)}s | tool_use={has_tool} | "
         f"stop={message['stop_reason']} | usage={message['usage']}")
     if not has_tool and valid_names:
@@ -1873,7 +2002,8 @@ def _stream(payload, client_req, valid_names, breakdown, t0, n, ctx):
             "type": "api_error", "message": f"Upstream {status}: {txt}"}})
         return
 
-    message, has_tool = process_upstream(upstream, client_req, FEATS, valid_names)
+    message, has_tool = process_upstream(upstream, client_req, FEATS, valid_names,
+                                         payload_chars=int(ctx.get("payload_chars", 0) or 0))
     log(f"stream OK in {round(time.time() - t0, 1)}s | tool_use={has_tool} | "
         f"stop={message['stop_reason']} | usage={message['usage']}")
     if not has_tool and valid_names:
