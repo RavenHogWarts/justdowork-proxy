@@ -61,7 +61,7 @@ from datetime import datetime
 from urllib.parse import urlparse, unquote
 
 import requests
-from flask import Flask, Response, request, stream_with_context
+from flask import Flask, Response, has_request_context, request, stream_with_context
 
 try:                                    # served at `/` by the dashboard
     from dashboard import DASHBOARD_HTML
@@ -108,6 +108,8 @@ DEFAULT_CONFIG = {
         "enforce_stop_sequences": True,
         "usage_baseline_tokens": 0,     # set to 10380 to hide the relay's ~10.4k phantom tokens
         "upstream_retries": 2,          # every retry costs money, so do not raise this much
+        "client_key_passthrough": True, # use the key the client sent (e.g. from cc-switch);
+                                        # falls back to the configured key on 401/403
 
         # ---- server-side web tools (the proxy runs these itself) ----
         "server_tools_enabled": True,
@@ -365,6 +367,7 @@ def stats_snapshot():
         "upstream": CONFIG["upstream_base_url"],
         "model": CONFIG.get("model"),
         "key_set": bool(CONFIG.get("api_key")),
+        "client_key_passthrough": bool(FEATS.get("client_key_passthrough", True)),
         "usage_baseline_tokens": int(FEATS.get("usage_baseline_tokens", 0) or 0),
         "max_history_chars": int(FEATS.get("max_history_chars", 0) or 0),
         "max_tool_result_chars": int(FEATS.get("max_tool_result_chars", 0) or 0),
@@ -1230,9 +1233,37 @@ def execute_server_tool(name, tool_input, feats):
 # Upstream call
 # --------------------------------------------------------------------------- #
 
+def _client_supplied_key():
+    """The API key the client sent (x-api-key, or Authorization: Bearer).
+    With client_key_passthrough on, it becomes the upstream key, so a
+    provider switcher like cc-switch stays the sole manager of keys."""
+    if not FEATS.get("client_key_passthrough", True):
+        return ""
+    if not has_request_context():
+        return ""
+    k = (request.headers.get("x-api-key") or "").strip()
+    if not k:
+        auth = request.headers.get("Authorization") or ""
+        if auth.lower().startswith("bearer "):
+            k = auth[7:].strip()
+    # same cleanup as load_config, so pasted keys with invisible chars work
+    return re.sub(r"[^\x21-\x7e]", "", k)
+
+
 def call_upstream(payload):
+    cfg_key = CONFIG.get("api_key") or ""
+    key = _client_supplied_key() or cfg_key
+    status, data = _upstream_once(payload, key)
+    if status in (401, 403) and key != cfg_key and cfg_key:
+        log(f"upstream rejected the client-supplied key ({status}) -> "
+            "retrying once with the configured key")
+        bump("retries")
+        status, data = _upstream_once(payload, cfg_key)
+    return status, data
+
+
+def _upstream_once(payload, key):
     url = CONFIG["upstream_base_url"] + "/v1/messages"
-    key = CONFIG.get("api_key") or ""
     headers = {"content-type": "application/json", "x-api-key": key,
                "Authorization": f"Bearer {key}", "anthropic-version": "2023-06-01"}
     attempts = max(1, int(FEATS.get("upstream_retries", 2) or 1))
@@ -1703,7 +1734,8 @@ def v1_messages():
     log(f"===== REQ #{n} | client_msgs={len(body.get('messages', []))} "
         f"sent_msgs={breakdown.get('history_msgs')} | tools={len(tools)} | "
         f"~tok sys={breakdown.get('system_tok')} tools={breakdown.get('tools_tok')} "
-        f"hist={breakdown.get('history_tok')} | stream={wants_stream} =====")
+        f"hist={breakdown.get('history_tok')} | stream={wants_stream} | "
+        f"key={'client' if _client_supplied_key() else 'config'} =====")
 
     t0 = time.time()
     ctx = {"breakdown": breakdown, "t0": t0, "stream": wants_stream,
@@ -1866,15 +1898,17 @@ def models():
 def health():
     return Response(json.dumps({"ok": True, "upstream": CONFIG["upstream_base_url"],
                                 "model": CONFIG["model"],
-                                "key_set": bool(CONFIG.get("api_key"))}),
+                                "key_set": bool(CONFIG.get("api_key")),
+                                "client_key_passthrough": bool(FEATS.get("client_key_passthrough", True))}),
                     content_type="application/json")
 
 
 @app.route("/api/key", methods=["GET"])
 def api_key_get():
     k = CONFIG.get("api_key") or ""
-    masked = (k[:6] + "..." + k[-4:]) if len(k) >= 14 else "set"
-    return Response(json.dumps({"key_set": bool(k), "masked": masked}),
+    masked = (k[:6] + "..." + k[-4:]) if len(k) >= 14 else ("set" if k else "")
+    return Response(json.dumps({"key_set": bool(k), "masked": masked,
+                                "passthrough": bool(FEATS.get("client_key_passthrough", True))}),
                     content_type="application/json")
 
 
@@ -1940,13 +1974,19 @@ def _shutdown(*_):
 
 if __name__ == "__main__":
     if not CONFIG.get("api_key"):
-        how = ('setx UPSTREAM_API_KEY "sk-..."    (then open a NEW terminal)'
-               if os.name == "nt" else
-               "export UPSTREAM_API_KEY='sk-...'")
-        print("!! UPSTREAM_API_KEY is not set. Either:\n"
-              f"     {how}\n"
-              '   or put the key into config.json as "api_key": "sk-...".')
-        sys.exit(1)
+        if FEATS.get("client_key_passthrough", True):
+            print("note: no API key configured. Upstream calls will use the key\n"
+                  "each client sends (client_key_passthrough). You can also set\n"
+                  "one any time in the dashboard's 'API key' panel -- it becomes\n"
+                  "the fallback key when a client key is missing or rejected.")
+        else:
+            how = ('setx UPSTREAM_API_KEY "sk-..."    (then open a NEW terminal)'
+                   if os.name == "nt" else
+                   "export UPSTREAM_API_KEY='sk-...'")
+            print("!! UPSTREAM_API_KEY is not set. Either:\n"
+                  f"     {how}\n"
+                  '   or put the key into config.json as "api_key": "sk-...".')
+            sys.exit(1)
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
     host = CONFIG.get("listen_host", "127.0.0.1")

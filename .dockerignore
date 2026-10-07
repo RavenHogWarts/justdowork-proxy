@@ -32,4 +32,3 @@ DOCKER.zh-CN.md
 .dockerignore
 Dockerfile
 docker-compose.yml
-.env.example

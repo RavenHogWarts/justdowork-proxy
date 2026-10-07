@@ -213,12 +213,13 @@ function render(s){
   last = s;
   var reqs = s.total_reqs || 0, ok = s.ok || 0, fail = s.fail || 0;
 
-  el("dot").className = "dot" + (s.key_set ? "" : " off");
+  el("dot").className = "dot" + ((s.key_set || s.client_key_passthrough) ? "" : " off");
   el("uptime").textContent = "| up " + uptime(s.uptime_s + tick);
   el("meta").innerHTML =
     "<span>upstream <b>" + esc(s.upstream) + "</b></span>" +
     "<span>model <b>" + esc(s.model) + "</b></span>" +
-    "<span>key <b>" + (s.key_set ? "set" : "MISSING") + "</b></span>" +
+    "<span>key <b>" + (s.key_set ? "set"
+                    : (s.client_key_passthrough ? "client-supplied" : "MISSING")) + "</b></span>" +
     "<span>avg <b>" + (reqs ? (Number(s.duration||0)/reqs).toFixed(1) : "0") + "s</b></span>";
 
   var avgIn = reqs ? Math.round((s.in_tok||0)/reqs) : 0;
@@ -380,8 +381,11 @@ function loadKey(){
     .then(function(r){ return r.json(); })
     .then(function(s){
       el("keycur").textContent = s.key_set ? s.masked : "not set";
-      el("keypill").innerHTML = s.key_set ? '<span class="pill ok">set</span>'
-                                          : '<span class="pill no">missing</span>';
+      el("keypill").innerHTML = s.key_set
+        ? '<span class="pill ok">set</span>'
+        : (s.passthrough
+            ? '<span class="pill dr">none &mdash; client-supplied keys in use</span>'
+            : '<span class="pill no">missing</span>');
     });
 }
 el("keysave").onclick = function(){
