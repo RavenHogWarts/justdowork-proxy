@@ -253,6 +253,7 @@ STATS = {
     "sys_tok": 0, "tools_tok": 0, "hist_tok": 0,
     "raw_hist_tok": 0, "raw_tools_tok": 0, "saved_tok": 0, "sent_tok": 0,
     "client_msgs": 0, "sent_msgs": 0, "duration": 0.0,
+    "status_counts": {},
     "recent": deque(maxlen=300),
     "errors": deque(maxlen=30),
 }
@@ -287,10 +288,17 @@ def diff_counts(before):
     return out
 
 
-def make_rec(n, ctx, message=None, ok=True, status=0, note=""):
-    """One request's record -- the row shown in the dashboard table."""
+def make_rec(n, ctx, message=None, ok=True, status=0, note="", note_code="", note_full=""):
+    """One request's record -- the row shown in the dashboard table.
+
+    `note` is free human text (e.g. a verbatim upstream error message), shown
+    as-is. `note_code` is a stable key the dashboard can translate into the
+    active UI language; when set it takes precedence over `note` for display.
+    `note` is kept short for the row; `note_full` carries the untruncated text
+    (bounded) so the dashboard can reveal it on demand -- defaults to `note`."""
     bd = ctx.get("breakdown") or {}
     d = diff_counts(ctx.get("snap0") or {})
+    _now = datetime.now()
     usage = (message or {}).get("usage") or {}
     base = int(FEATS.get("usage_baseline_tokens", 0) or 0)
     in_tok = int(usage.get("input_tokens", 0) or 0)
@@ -303,7 +311,8 @@ def make_rec(n, ctx, message=None, ok=True, status=0, note=""):
     raw_tools_tok = int(bd.get("raw_tools_tok", tools_tok) or 0)
     saved_tok = max(0, raw_hist_tok - hist_tok) + max(0, raw_tools_tok - tools_tok)
     return {
-        "n": n, "ts": datetime.now().strftime("%H:%M:%S"), "t": time.time(),
+        "n": n, "ts": _now.strftime("%H:%M:%S"),
+        "ts_full": _now.strftime("%Y-%m-%d %H:%M:%S"), "t": time.time(),
         "stream": bool(ctx.get("stream")),
         "client_msgs": int(ctx.get("client_msgs", 0)),
         "sent_msgs": int(bd.get("history_msgs", 0) or 0),
@@ -321,7 +330,9 @@ def make_rec(n, ctx, message=None, ok=True, status=0, note=""):
         "ok": bool(ok), "status": int(status), "tools": int(ctx.get("n_tools", 0)),
         "tool_calls": sum(d["tool_uses"].values()) + sum(d["server_tools"].values()),
         "drops": d["drops"], "retries": d["retries"],
-        "names": names, "note": note, "key_src": str(ctx.get("key_src") or ""),
+        "names": names, "note": note, "note_code": note_code,
+        "note_full": (note_full or note)[:2000],
+        "key_src": str(ctx.get("key_src") or ""),
     }
 
 
@@ -338,8 +349,14 @@ def record(rec):
             STATS[k] = STATS.get(k, 0) + int(rec.get(k, 0) or 0)
         STATS["duration"] = STATS.get("duration", 0.0) + float(rec.get("dur", 0) or 0)
         if not rec["ok"]:
-            STATS["errors"].appendleft({"ts": rec["ts"], "n": rec["n"],
-                                        "status": rec["status"], "note": rec["note"]})
+            sc = STATS.setdefault("status_counts", {})
+            key = str(rec["status"] or "err")
+            sc[key] = sc.get(key, 0) + 1
+            STATS["errors"].appendleft({"ts": rec["ts"], "ts_full": rec.get("ts_full", ""),
+                                        "n": rec["n"],
+                                        "status": rec["status"], "note": rec["note"],
+                                        "note_code": rec.get("note_code", ""),
+                                        "note_full": rec.get("note_full", "")})
 
 
 def _dir_bytes(path):
@@ -359,6 +376,7 @@ def stats_snapshot():
     """The full JSON payload behind the dashboard."""
     with _ST_LOCK:
         s = {k: v for k, v in STATS.items() if k not in ("recent", "errors", "started")}
+        s["status_counts"] = dict(STATS.get("status_counts") or {})
         recent = list(STATS["recent"])
         errors = list(STATS["errors"])
         started = STATS["started"]
@@ -1929,7 +1947,8 @@ def v1_messages():
         status, upstream = resolve_with_fallback(payload, FEATS)
     except Exception as e:
         log(f"REQ #{n} upstream EXCEPTION: {e}")
-        record(make_rec(n, ctx, ok=False, status=502, note=f"exception: {e}"))
+        record(make_rec(n, ctx, ok=False, status=502, note=f"exception: {e}",
+                        note_code="upstreamException"))
         return Response(json.dumps({"type": "error", "error": {
             "type": "api_error", "message": f"upstream connection failed: {e}"}}),
             status=502, content_type="application/json")
@@ -1941,7 +1960,7 @@ def v1_messages():
         salv = _salvage_truncated(upstream)
         if salv:
             log(f"REQ #{n}: salvaged a truncated body ({len(salv)} chars)")
-            record(make_rec(n, ctx, ok=True, status=status, note="truncated body salvage"))
+            record(make_rec(n, ctx, ok=True, status=status, note="truncated body salvage", note_code="truncatedSalvage"))
             return Response(json.dumps({
                 "id": "msg_" + uuid.uuid4().hex[:16], "type": "message",
                 "role": "assistant", "model": payload.get("model"),
@@ -1955,7 +1974,8 @@ def v1_messages():
                    or upstream.get("message") or upstream.get("_raw")
                    or json.dumps(upstream, ensure_ascii=False)[:400])
         log(f"REQ #{n} FAIL {status}: {head(msg, 200)}")
-        record(make_rec(n, ctx, ok=False, status=status, note=head(msg, 120)))
+        record(make_rec(n, ctx, ok=False, status=status, note=head(msg, 120),
+                        note_full=str(msg)))
         return Response(json.dumps({"type": "error", "error": {
             "type": "api_error" if status != 400 else "invalid_request_error",
             "message": f"Upstream {status}: {msg}"}}),
@@ -2002,7 +2022,8 @@ def _stream(payload, client_req, valid_names, breakdown, t0, n, ctx):
 
     if "e" in box:
         log(f"stream upstream EXCEPTION: {box['e']}")
-        record(make_rec(n, ctx, ok=False, status=502, note=f"exception: {box['e']}"))
+        record(make_rec(n, ctx, ok=False, status=502, note=f"exception: {box['e']}",
+                        note_code="upstreamException"))
         yield sse("error", {"type": "error", "error": {
             "type": "api_error", "message": f"upstream connection failed: {box['e']}"}})
         return
@@ -2018,7 +2039,7 @@ def _stream(payload, client_req, valid_names, breakdown, t0, n, ctx):
                    "content": [{"type": "text", "text": salv}],
                    "stop_reason": "end_turn", "stop_sequence": None,
                    "usage": {"input_tokens": 0, "output_tokens": 0}}
-            record(make_rec(n, ctx, ok=True, status=status, note="truncated body salvage"))
+            record(make_rec(n, ctx, ok=True, status=status, note="truncated body salvage", note_code="truncatedSalvage"))
             for ev in synthesize_sse(msg, emit_start=False):
                 yield ev
             return
@@ -2027,7 +2048,8 @@ def _stream(payload, client_req, valid_names, breakdown, t0, n, ctx):
             txt = ((upstream.get("error") or {}).get("message")
                    or upstream.get("_raw") or json.dumps(upstream, ensure_ascii=False)[:300])
         log(f"stream FAIL {status}: {head(txt, 180)}")
-        record(make_rec(n, ctx, ok=False, status=status, note=head(txt, 120)))
+        record(make_rec(n, ctx, ok=False, status=status, note=head(txt, 120),
+                        note_full=str(txt)))
         yield sse("error", {"type": "error", "error": {
             "type": "api_error", "message": f"Upstream {status}: {txt}"}})
         return
@@ -2125,6 +2147,7 @@ def stats_reset():
                   "saved_tok", "sent_tok"):
             STATS[k] = 0
         STATS["duration"] = 0.0
+        STATS["status_counts"] = {}
         STATS["recent"].clear()
         STATS["errors"].clear()
     with _COUNT_LOCK:

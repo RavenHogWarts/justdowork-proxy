@@ -27,7 +27,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <style>
   :root{
     --bg:#0e1116; --panel:#161a22; --panel2:#1c212b; --line:#252c38;
-    --fg:#e6e9ef; --muted:#8b93a7; --accent:#5b9dff;
+    --fg:#e6e9ef; --muted:#a3abc0; --accent:#5b9dff;
     --good:#3ecf8e; --warn:#ffb454; --bad:#ff6b6b; --violet:#a78bfa;
   }
   *{box-sizing:border-box}
@@ -71,10 +71,11 @@ DASHBOARD_HTML = r"""<!doctype html>
   .chip{background:var(--panel2);border:1px solid var(--line);border-radius:999px;
         padding:4px 11px;font-size:12.5px}
   .chip b{font-variant-numeric:tabular-nums}
-  .tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+  .tblwrap{overflow:auto;max-height:360px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+  .errlist{max-height:220px;overflow-y:auto}
   table{border-collapse:collapse;width:100%;font-size:12.5px;white-space:nowrap}
   th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--line)}
-  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;
+  th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;
      letter-spacing:.05em;position:sticky;top:0;background:var(--panel)}
   tbody tr:last-child td{border-bottom:none}
   tbody tr:hover{background:var(--panel2)}
@@ -84,8 +85,21 @@ DASHBOARD_HTML = r"""<!doctype html>
   .pill.no{color:var(--bad);border-color:rgba(255,107,107,.4)}
   .pill.st{color:var(--accent);border-color:rgba(91,157,255,.4)}
   .pill.dr{color:var(--warn);border-color:rgba(255,180,84,.4)}
+  td.note{white-space:normal;max-width:360px}
+  .notewrap{display:flex;align-items:flex-start;gap:6px}
+  .notetxt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px}
+  .notetxt.open{white-space:normal;word-break:break-word;max-width:none}
+  .notebtn{flex:0 0 auto;background:var(--panel2);border:1px solid var(--line);
+           border-radius:6px;padding:0 6px;font-size:11px;line-height:18px;
+           color:var(--muted);cursor:pointer}
+  .notebtn:hover{border-color:var(--accent);color:var(--accent)}
+  .errrow{padding:3px 0;cursor:pointer}
+  .errrow .d{display:none;white-space:pre-wrap;word-break:break-word;
+             margin:2px 0 6px;color:var(--fg)}
+  .errrow.open .d{display:block}
+  .statrow{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:10px}
   .muted{color:var(--muted)}
-  .err{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+  .err{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
   .empty{color:var(--muted);padding:16px;text-align:center}
   .hint{font-size:12px;color:var(--muted);margin-top:9px}
   button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
@@ -138,6 +152,7 @@ DASHBOARD_HTML = r"""<!doctype html>
   </div>
 
   <h2 data-i18n="secRecent"></h2>
+  <div class="statrow" id="statrow"></div>
   <div class="tblwrap">
     <table>
       <thead><tr>
@@ -152,6 +167,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       <tbody id="rows"></tbody>
     </table>
   </div>
+  <div class="hint" id="rowsmore"></div>
 
   <div id="errbox"></div>
 
@@ -175,6 +191,8 @@ DASHBOARD_HTML = r"""<!doctype html>
 <script>
 "use strict";
 var paused = false, last = null, tick = 0;
+var ROW_STEP = 50, rowLimit = ROW_STEP;   // render in chunks, "load more" on demand
+var openNotes = {};                        // request n -> note expanded?
 
 /* ---- i18n ------------------------------------------------------------- */
 var I18N = {
@@ -215,6 +233,11 @@ var I18N = {
     emptyTable: "No requests yet. Point Claude Code at this proxy " +
                 "(set ANTHROPIC_BASE_URL to its address) and ask it something.",
     okWord: "ok", dash: "-",
+    noteUpstreamException: "upstream connection failed",
+    noteTruncatedSalvage: "truncated body salvaged",
+    noteMore: "more", noteLess: "less",
+    loadMore: "Show {n} more", showingRows: "showing {n} of {total}",
+    statFailRate: "failure rate", statAllOk: "all ok",
     thKeySrc: "Key", keySrcClient: "client", keySrcConfig: "config",
     tokenPrompt: "This proxy requires an access token (X-Proxy-Token):",
     keyCurrent: "current:", notSet: "not set",
@@ -267,6 +290,11 @@ var I18N = {
     emptyTable: "还没有请求。把 Claude Code 指向本代理（设置 ANTHROPIC_BASE_URL" +
                 " 为其地址）后随便问点什么。",
     okWord: "正常", dash: "-",
+    noteUpstreamException: "上游连接失败",
+    noteTruncatedSalvage: "已从截断的响应体中恢复",
+    noteMore: "展开", noteLess: "收起",
+    loadMore: "再显示 {n} 条", showingRows: "显示 {n} / {total}",
+    statFailRate: "失败率", statAllOk: "全部正常",
     thKeySrc: "密钥来源", keySrcClient: "客户端", keySrcConfig: "配置",
     tokenPrompt: "此代理需要访问令牌（X-Proxy-Token）：",
     keyCurrent: "当前：", notSet: "未设置",
@@ -351,6 +379,44 @@ function esc(s){
   });
 }
 function sum(o){ var t2 = 0, k; for (k in o) if (o.hasOwnProperty(k)) t2 += Number(o[k]) || 0; return t2; }
+
+/* A request/error note: proxy-generated notes carry a stable `note_code`
+   we translate into the active language; the raw upstream error text (no
+   code) is shown verbatim. For an upstream exception we append its detail.
+   `full` picks the untruncated `note_full` over the short row `note`. */
+function noteText(r, full){
+  var code = r && r.note_code;
+  var raw = (full && r && r.note_full) ? r.note_full : ((r && r.note) || "");
+  if (code){
+    var key = "note" + code.charAt(0).toUpperCase() + code.slice(1);
+    var label = t(key);
+    if (label !== key){
+      if (code === "upstreamException"){
+        var i = raw.indexOf("exception:");
+        var detail = i >= 0 ? raw.slice(i + 10).trim() : raw;
+        return detail ? label + ": " + detail : label;
+      }
+      return label;
+    }
+  }
+  return raw;
+}
+
+/* The Note table cell. When the full text is longer than the short note
+   (i.e. it was truncated for the row), add a toggle that reveals it. */
+function noteCell(r){
+  if (!r.note) return '<span class="muted">' + t("okWord") + "</span>";
+  var open = !!openNotes[r.n];
+  var shortTxt = noteText(r, false), fullTxt = noteText(r, true);
+  var txt = open ? fullTxt : shortTxt;
+  var hasMore = fullTxt.length > shortTxt.length;
+  var html = '<div class="notewrap"><span class="notetxt' + (open ? " open" : "") +
+             '">' + esc(txt) + "</span>";
+  if (hasMore)
+    html += '<button class="notebtn" data-note="' + r.n + '">' +
+            t(open ? "noteLess" : "noteMore") + "</button>";
+  return html + "</div>";
+}
 
 function card(k, v, sub, cls){
   return '<div class="card"><div class="k">' + esc(k) + '</div>' +
@@ -474,10 +540,29 @@ function render(s){
     (s.dump_requests ? '<b style="color:var(--warn)">' + t("dumpsOn") + '</b>'
                      : '<b>' + t("dumpsOff") + '</b>') + '</span>';
 
-  // ---- table ----
+  // ---- status summary ----
+  var reqTotal = reqs, failTotal = fail;
+  var sr = "";
+  if (reqTotal){
+    var rate = (failTotal * 100 / reqTotal);
+    sr += '<span class="chip">' + t("statFailRate") + ' <b style="color:var(--' +
+          (failTotal ? "bad" : "good") + ')">' + rate.toFixed(1) + '%</b></span>';
+    var sc = s.status_counts || {}, scKeys = Object.keys(sc).sort();
+    if (scKeys.length)
+      for (i = 0; i < scKeys.length; i++)
+        sr += '<span class="chip">' + esc(scKeys[i]) +
+              ' <b style="color:var(--bad)">' + fmt(sc[scKeys[i]]) + '</b></span>';
+    else
+      sr += '<span class="chip muted">' + t("statAllOk") + '</span>';
+  }
+  el("statrow").innerHTML = sr;
+
+  // ---- table (rendered in chunks; "load more" extends rowLimit) ----
   var rows = "";
   var list = (s.recent || []);
-  for (i = 0; i < list.length; i++){
+  if (rowLimit > list.length) rowLimit = Math.max(ROW_STEP, list.length);
+  var shown = Math.min(rowLimit, list.length);
+  for (i = 0; i < shown; i++){
     var r = list[i];
     var pills = "";
     if (!r.ok) pills += '<span class="pill no">' + t("pillFail") + " " + r.status + "</span> ";
@@ -486,7 +571,7 @@ function render(s){
     var nm = (r.names || []).join(", ");
     rows += "<tr>" +
       "<td>" + r.n + "</td>" +
-      "<td>" + esc(r.ts) + "</td>" +
+      '<td title="' + esc(r.ts_full || r.ts) + '">' + esc(r.ts) + "</td>" +
       "<td>" + (pills || '<span class="muted">' + t("dash") + "</span>") + "</td>" +
       '<td class="num">' + r.client_msgs + "&rarr;" + r.sent_msgs + "</td>" +
       '<td class="num">' + fmt(r.in_tok) + "</td>" +
@@ -496,20 +581,38 @@ function render(s){
       "<td>" + (r.key_src ? (r.key_src === "client" ? t("keySrcClient") : t("keySrcConfig"))
                          : '<span class="muted">' + t("dash") + "</span>") + "</td>" +
       '<td class="num">' + (r.drops ? '<span class="pill dr">' + r.drops + "</span>" : t("dash")) + "</td>" +
-      "<td>" + (r.note ? esc(r.note) : '<span class="muted">' + t("okWord") + "</span>") + "</td>" +
+      '<td class="note">' + noteCell(r) + "</td>" +
       "</tr>";
   }
   el("rows").innerHTML = rows ||
     '<tr><td colspan="11" class="empty">' + t("emptyTable") + "</td></tr>";
 
+  // "load more" footer
+  var moreEl = el("rowsmore");
+  if (list.length > shown){
+    var remain = list.length - shown, step = Math.min(ROW_STEP, remain);
+    moreEl.innerHTML = '<button id="loadmore">' + tf("loadMore", {n: step}) + "</button> " +
+                       '<span class="muted">' + tf("showingRows", {n: shown, total: list.length}) + "</span>";
+    el("loadmore").onclick = function(){ rowLimit += ROW_STEP; if (last) render(last); };
+  } else if (list.length){
+    moreEl.innerHTML = '<span class="muted">' + tf("showingRows", {n: shown, total: list.length}) + "</span>";
+  } else {
+    moreEl.innerHTML = "";
+  }
+
   // ---- errors ----
   var errs = s.errors || [];
   var eb = el("errbox");
   if (errs.length){
-    var eh = '<h2>' + t("secErrors") + '</h2><div class="panel err">';
-    for (i = 0; i < errs.length; i++)
-      eh += '<div style="padding:3px 0">#' + errs[i].n + " " + esc(errs[i].ts) +
-            ' <span class="pill no">' + errs[i].status + "</span> " + esc(errs[i].note) + "</div>";
+    var eh = '<h2>' + t("secErrors") + '</h2><div class="panel err errlist">';
+    for (i = 0; i < errs.length; i++){
+      var e = errs[i], shortE = esc(noteText(e, false)), fullE = esc(noteText(e, true));
+      var expandable = fullE.length > shortE.length;
+      eh += '<div class="errrow' + (expandable ? " can" : "") + '" data-err="' + i + '">#' +
+            e.n + " " + '<span title="' + esc(e.ts_full || e.ts) + '">' + esc(e.ts) + "</span>" +
+            ' <span class="pill no">' + e.status + "</span> " + shortE +
+            (expandable ? '<div class="d">' + fullE + "</div>" : "") + "</div>";
+    }
     eb.innerHTML = eh + "</div>";
   } else {
     eb.innerHTML = "";
@@ -559,6 +662,21 @@ el("reset").onclick = function(){
   ffetch("/stats/reset", {method: "POST"}).then(poll);
 };
 
+/* delegated clicks: expand/collapse a request note (survives re-render
+   because openNotes is keyed by request #) ... */
+el("rows").addEventListener("click", function(ev){
+  var b = ev.target.closest ? ev.target.closest(".notebtn") : null;
+  if (!b) return;
+  var n = b.getAttribute("data-note");
+  openNotes[n] = !openNotes[n];
+  if (last) render(last);
+});
+/* ... and expand an error line in place */
+el("errbox").addEventListener("click", function(ev){
+  var row = ev.target.closest ? ev.target.closest(".errrow.can") : null;
+  if (row) row.classList.toggle("open");
+});
+
 function loadKey(){
   ffetch("/api/key", {cache: "no-store"})
     .then(function(r){ return r.json(); })
@@ -592,7 +710,17 @@ el("keysave").onclick = function(){
 applyStatic();
 loadKey();
 poll();
+
+/* polling backs off when the tab is hidden: no network while in the
+   background, and an immediate refresh the moment it becomes visible */
+function hidden(){
+  try { return document.hidden; } catch (e) { return false; }
+}
+document.addEventListener("visibilitychange", function(){
+  if (!hidden() && !paused){ tick = 0; poll(); }
+});
 setInterval(function(){
+  if (hidden()) return;            // asleep in the background
   tick++;
   if (!paused) poll();
   else if (last) render(last);     // keep the uptime ticking
