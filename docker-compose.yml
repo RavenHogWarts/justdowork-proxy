@@ -24,8 +24,9 @@ services:
     ports:
       - "${CCPROXY_BIND:-127.0.0.1}:${CCPROXY_PORT:-18181}:8181"
     environment:
-      # optional relay override; empty means "use config.json"
+      # optional overrides; empty means "use config.json"
       TARGET_URL: "${TARGET_URL:-}"
+      UI_LANG: "${UI_LANG:-}"
     # Optional: mount an .env file to persist a fallback key across
     # container REcreations (a plain `docker restart` already keeps it):
     # volumes:

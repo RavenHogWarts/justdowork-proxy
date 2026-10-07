@@ -86,6 +86,9 @@ DEFAULT_CONFIG = {
 
     # The names the relay understands NATIVELY (confirmed by testing).
     # Every other tool goes through the text protocol (<tool_call>).
+    # Edit was re-verified INTACT (3/3 forced calls, 2026-10-07, edit_probe.py)
+    # after a 2026-10-06 report of it dropping old_string/new_string -- if edits
+    # start losing arguments again, run edit_probe.py and drop Edit from here.
     "native_tool_map": {"Read": "read", "Write": "write", "Edit": "edit", "Bash": "bash"},
 
     "features": {
@@ -108,6 +111,10 @@ DEFAULT_CONFIG = {
         "enforce_stop_sequences": True,
         "usage_baseline_tokens": 0,     # set to 10380 to hide the relay's ~10.4k phantom tokens
         "upstream_retries": 2,          # every retry costs money, so do not raise this much
+        "upstream_retry_status": [429, 502, 503, 504],
+                                        # which upstream statuses are worth a retry. Narrow on
+                                        # purpose: a rejected request is usually not billed, but
+                                        # a re-SENT payload is (e.g. 524 = payload too big here)
         "client_key_passthrough": True, # use the key the client sent (e.g. from cc-switch);
                                         # falls back to the configured key on 401/403
 
@@ -208,6 +215,8 @@ def load_config():
         cfg["listen_port"] = int(os.environ["PORT"])
     if os.environ.get("LISTEN_HOST"):
         cfg["listen_host"] = os.environ["LISTEN_HOST"]
+    if os.environ.get("UI_LANG"):
+        cfg["ui_lang"] = os.environ["UI_LANG"]
     # clean the key (strip invisible characters that sneak in when pasting)
     cfg["api_key"] = re.sub(r"[^\x21-\x7e]", "", cfg.get("api_key") or "")
     cfg["upstream_base_url"] = (cfg.get("upstream_base_url") or "").rstrip("/")
@@ -1269,7 +1278,7 @@ def _upstream_once(payload, key):
                "Authorization": f"Bearer {key}", "anthropic-version": "2023-06-01"}
     attempts = max(1, int(FEATS.get("upstream_retries", 2) or 1))
     backoff = [2.0, 5.0, 10.0]
-    retryable = {408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529}
+    retryable = set(int(s) for s in (FEATS.get("upstream_retry_status") or (429, 502, 503, 504)))
     timeout = float(CONFIG.get("upstream_timeout_s", 300))
     status, data = 0, {}
     for attempt in range(1, attempts + 1):
@@ -1279,6 +1288,13 @@ def _upstream_once(payload, key):
         bump("upstream_calls")
         try:
             r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        except requests.exceptions.ReadTimeout as e:
+            # the upstream may already have processed (and billed) this request;
+            # re-sending it would pay twice, so return the error instead of retrying
+            log(f"upstream attempt {attempt} READ TIMEOUT -> NOT retrying (double-billing safety)")
+            return 0, {"error": {"type": "api_error",
+                                 "message": f"upstream read timeout after {timeout}s "
+                                            f"(not retried to avoid double billing): {e}"}}
         except Exception as e:
             log(f"upstream attempt {attempt} EXCEPTION: {e}")
             status, data = 0, {"error": {"type": "api_error", "message": str(e)}}
@@ -1874,16 +1890,20 @@ def _stream(payload, client_req, valid_names, breakdown, t0, n, ctx):
 @app.route("/v1/messages/count_tokens", methods=["POST"])
 def count_tokens():
     body = request.get_json(silent=True) or {}
+    # this relay tokenizes at ~3.3 bytes/token (measured 2026-10), denser
+    # than the usual chars/4 heuristic
+    def _est(s):
+        return int(len(s) / 3.3)
     total = 0
     sysv = body.get("system")
     if isinstance(sysv, str):
-        total += len(sysv) // 4
+        total += _est(sysv)
     elif isinstance(sysv, list):
-        total += sum(len(b.get("text", "")) for b in sysv if isinstance(b, dict)) // 4
+        total += _est("".join(b.get("text", "") for b in sysv if isinstance(b, dict)))
     for m in body.get("messages") or []:
-        total += len(_flatten_blocks_to_text(m.get("content"), 0)) // 4
+        total += _est(_flatten_blocks_to_text(m.get("content"), 0))
     for t in body.get("tools") or []:
-        total += len(json.dumps(t, ensure_ascii=False)) // 4
+        total += _est(json.dumps(t, ensure_ascii=False))
     return Response(json.dumps({"input_tokens": max(1, total)}),
                     content_type="application/json")
 

@@ -109,8 +109,12 @@ never needs to change:
 
 The dashboard is bilingual (English / 简体中文): the button in the header
 switches language and the choice is remembered per browser. The default
-language follows the `ui_lang` field of `config.json` (`en` or `zh`; in
-Docker, change it via a mounted `config.json`).
+language follows the `ui_lang` field of `config.json` (`en` or `zh`), which
+the `UI_LANG` environment variable overrides — compose passes it through:
+
+```sh
+UI_LANG=zh docker compose up -d
+```
 
 ---
 
@@ -255,6 +259,15 @@ flags — mount your own copy read-only:
 ```
 
 Environment variables and `.env` always win over the file.
+
+**Native tool map:** the shipped `native_tool_map` routes
+Read/Write/**Edit**/Bash natively. Edit was reported broken on 2026-10-06
+(dropping `old_string`/`new_string`), but a 2026-10-07 re-run of
+`edit_probe.py` measured ARGS INTACT 3/3 (the relay likely fixed it). If
+edits start losing arguments again: verify with
+`python edit_probe.py` (needs `UPSTREAM_API_KEY`, one small model call),
+then remove `"Edit": "edit"` from `native_tool_map` via a mounted
+`config.json` — Edit falls back to the `<tool_call>` text protocol.
 
 ---
 

@@ -233,8 +233,12 @@ curl -X POST http://127.0.0.1:18181/api/key \
 ### 界面语言
 
 dashboard 支持中英文：点右上角按钮（中 / EN）切换，选择会记住在该浏览器里；
-默认语言跟随 `config.json` 的 `ui_lang` 字段（`en` 或 `zh`，Docker 下经
-[挂载自定义 config.json](#七挂载自定义-configjson) 修改）。
+默认语言跟随 `config.json` 的 `ui_lang` 字段（`en` 或 `zh`），也可用
+`UI_LANG` 环境变量覆盖——compose 已透传，例如：
+
+```sh
+UI_LANG=zh docker compose up -d
+```
 
 ### 看日志
 
@@ -313,6 +317,14 @@ docker cp ccproxy:/app/ccproxy_log.txt .
 ```
 
 环境变量与 `.env` 的优先级始终高于该文件。
+
+**原生工具映射（native_tool_map）**：默认把 Read/Write/**Edit**/Bash 映射
+为原生工具。Edit 曾在 2026-10-06 被报会丢弃 `old_string`/`new_string`，
+但 2026-10-07 用 `edit_probe.py` 复测 3 次全部 ARGS INTACT（中转站可能
+已修复）。若日后编辑又开始丢参数：设好 `UPSTREAM_API_KEY` 运行
+`python edit_probe.py`（消耗一次很小的模型调用）确认，然后在挂载的
+config.json 的 `native_tool_map` 里删掉 `"Edit": "edit"`，Edit 即改走
+`<tool_call>` 文本协议。
 
 ---
 
