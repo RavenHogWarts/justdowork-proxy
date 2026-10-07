@@ -5,8 +5,9 @@
 # use is not permitted without a separate written commercial license.
 # See LICENSE or https://polyformproject.org/licenses/noncommercial/1.0.0
 # ---------------------------------------------------------------------------
-#  No key or config file needed to start:
+#  Copy this file to docker-compose.yml, then bring the proxy up:
 #
+#      cp docker-compose.yml.example docker-compose.yml
 #      docker compose up -d --build
 #
 #  The proxy comes up on http://127.0.0.1:18181 and uses the API key each
@@ -39,6 +40,10 @@ services:
     # Runtime data (the dashboard-saved fallback key in .env, the request log
     # and debug_dump/) lives in /app/data. The named volume below keeps it
     # across `up --build` / `down` + `up`, not just a plain `docker restart`.
+    #
+    # To store the data in a host directory instead of a named volume,
+    # replace the line below with a bind mount, e.g.:
+    #   - E:/WorkSpace/Docker/justdowork-proxy-data:/app/data
     volumes:
       - ccproxy-data:/app/data
 
