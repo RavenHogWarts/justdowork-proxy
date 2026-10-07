@@ -1,0 +1,35 @@
+# keep the image to just what ccproxy needs at runtime
+
+# secrets -- the key is mounted at run time, never baked into the image
+.env
+
+# local venv / caches / editor droppings
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# runtime output
+debug_dump/
+*.log
+ccproxy_log.txt*
+
+# not needed inside the container (host-side helpers)
+.git/
+.gitignore
+start.sh
+start.bat
+run-claude.sh
+run-claude.bat
+run_tests.sh
+run-tests.bat
+test_offline.py
+agent_proxy.py
+names_probe.py
+DOCKER.md
+DOCKER.zh-CN.md
+.dockerignore
+Dockerfile
+docker-compose.yml
+.env.example

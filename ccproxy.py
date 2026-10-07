@@ -135,7 +135,61 @@ def _deep_merge(base, over):
     return base
 
 
+def _load_dotenv(path=None):
+    """Read KEY=VALUE lines from a .env next to ccproxy.py. The file only
+    fills in variables that are not already in the environment, so a real
+    export still wins. Lets local and docker runs share one key file."""
+    p = path or os.path.join(HERE, ".env")
+    if not os.path.isfile(p):
+        return
+    try:
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k:
+                    os.environ.setdefault(k, v)
+    except Exception as e:
+        print(f"[dotenv] could not read {p}: {e}")
+
+
+def _persist_env_value(name, value):
+    """Update one KEY=VALUE line in the .env next to ccproxy.py, so a key
+    changed from the dashboard survives a restart. Returns False when the
+    file can't be written (read-only mount, no permission): the change
+    then lives in memory only."""
+    path = os.path.join(HERE, ".env")
+    new_line = f"{name}={value}"
+    try:
+        lines = []
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        out, replaced = [], False
+        for ln in lines:
+            stripped = ln.strip()
+            if not stripped.startswith("#") and stripped.split("=", 1)[0].strip() == name:
+                out.append(new_line)
+                replaced = True
+            else:
+                out.append(ln)
+        if not replaced:
+            out.append(new_line)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+        os.environ[name] = value
+        return True
+    except Exception as e:
+        print(f"[dotenv] could not persist {name} to {path}: {e}")
+        return False
+
+
 def load_config():
+    _load_dotenv()
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     if os.path.exists(CONFIG_PATH):
         try:
@@ -150,6 +204,8 @@ def load_config():
         cfg["upstream_base_url"] = os.environ["TARGET_URL"]
     if os.environ.get("PORT"):
         cfg["listen_port"] = int(os.environ["PORT"])
+    if os.environ.get("LISTEN_HOST"):
+        cfg["listen_host"] = os.environ["LISTEN_HOST"]
     # clean the key (strip invisible characters that sneak in when pasting)
     cfg["api_key"] = re.sub(r"[^\x21-\x7e]", "", cfg.get("api_key") or "")
     cfg["upstream_base_url"] = (cfg.get("upstream_base_url") or "").rstrip("/")
@@ -1811,6 +1867,30 @@ def health():
     return Response(json.dumps({"ok": True, "upstream": CONFIG["upstream_base_url"],
                                 "model": CONFIG["model"],
                                 "key_set": bool(CONFIG.get("api_key"))}),
+                    content_type="application/json")
+
+
+@app.route("/api/key", methods=["GET"])
+def api_key_get():
+    k = CONFIG.get("api_key") or ""
+    masked = (k[:6] + "..." + k[-4:]) if len(k) >= 14 else "set"
+    return Response(json.dumps({"key_set": bool(k), "masked": masked}),
+                    content_type="application/json")
+
+
+@app.route("/api/key", methods=["POST"])
+def api_key_set():
+    body = request.get_json(silent=True) or {}
+    # same cleanup as load_config, so pasted keys with invisible chars work
+    key = re.sub(r"[^\x21-\x7e]", "", str(body.get("api_key") or ""))
+    if not key:
+        return Response(json.dumps({"ok": False, "error": "api_key is empty"}),
+                        status=400, content_type="application/json")
+    CONFIG["api_key"] = key
+    persisted = _persist_env_value("UPSTREAM_API_KEY", key)
+    log("api key changed from the dashboard -> " +
+        ("persisted to .env" if persisted else "in-memory only (.env not writable)"))
+    return Response(json.dumps({"ok": True, "key_set": True, "persisted": persisted}),
                     content_type="application/json")
 
 

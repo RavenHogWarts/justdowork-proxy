@@ -1,0 +1,38 @@
+# Copyright (c) 2026 abdurrehmandaudi
+# Required Notice: Copyright (c) 2026 abdurrehmandaudi -- justdowork-proxy
+# Licensed under the PolyForm Noncommercial License 1.0.0 -- commercial
+# use is not permitted without a separate written commercial license.
+# See LICENSE or https://polyformproject.org/licenses/noncommercial/1.0.0
+# ---------------------------------------------------------------------------
+#  cp .env.example .env   and put your relay key in it, then:
+#
+#      docker compose up -d --build
+#
+#  The key lives in .env only -- it is NOT passed as a container env var,
+#  so a key changed in the dashboard (which writes .env) also survives a
+#  plain `docker restart`. See DOCKER.md for all options.
+# ---------------------------------------------------------------------------
+services:
+  ccproxy:
+    build: .
+    image: ccproxy
+    container_name: ccproxy
+    restart: unless-stopped
+    # host binding defaults to loopback: the proxy has no auth of its own,
+    # so anyone who can reach the port can spend your relay key.
+    # Set CCPROXY_BIND=0.0.0.0 (in .env) only on a trusted, firewalled network.
+    ports:
+      - "${CCPROXY_BIND:-127.0.0.1}:${CCPROXY_PORT:-8181}:8181"
+    environment:
+      # optional relay override; empty means "use config.json".
+      # ${...} here is substituted from .env too.
+      TARGET_URL: "${TARGET_URL:-}"
+    volumes:
+      # the key file, read-write: the dashboard's "Save key" persists into it.
+      # create_host_path: false -> a missing .env is a clear error, not a
+      # silently created (and useless) directory.
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        bind:
+          create_host_path: false

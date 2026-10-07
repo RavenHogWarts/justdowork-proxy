@@ -11,6 +11,9 @@ __pycache__/
 debug_dump/
 *.log
 
+# the API key lives here (see .env.example) -- never commit it
+.env
+
 # editors / OS
 .DS_Store
 Thumbs.db

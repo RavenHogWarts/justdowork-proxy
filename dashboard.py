@@ -87,6 +87,11 @@ DASHBOARD_HTML = r"""<!doctype html>
   button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
          border-radius:8px;padding:5px 12px;font-size:12.5px;cursor:pointer}
   button:hover{border-color:var(--accent);color:var(--accent)}
+  button:disabled{opacity:.5;cursor:default}
+  input{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+        padding:5px 10px;font-size:12.5px;color:var(--fg);font-family:inherit}
+  input:focus{outline:none;border-color:var(--accent)}
+  input::placeholder{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -142,6 +147,23 @@ DASHBOARD_HTML = r"""<!doctype html>
   </div>
 
   <div id="errbox"></div>
+
+  <h2>API key</h2>
+  <div class="panel">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <span class="muted">current:</span>
+      <b class="err" id="keycur">loading ...</b>
+      <span id="keypill"></span>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+      <input id="keyin" type="password" placeholder="sk-..." autocomplete="off"
+             spellcheck="false" style="flex:1;min-width:220px">
+      <button id="keysave">Save key</button>
+    </div>
+    <div class="hint" id="keyhint">Applied immediately, no restart needed. Saved to
+      .env when the file is writable, so it survives restarts; otherwise it applies
+      until the next restart.</div>
+  </div>
 
 </div>
 
@@ -352,6 +374,35 @@ el("reset").onclick = function(){
   if (!confirm("Reset all counters? The recent-requests list will be cleared too.")) return;
   fetch("/stats/reset", {method: "POST"}).then(poll);
 };
+
+function loadKey(){
+  fetch("/api/key", {cache: "no-store"})
+    .then(function(r){ return r.json(); })
+    .then(function(s){
+      el("keycur").textContent = s.key_set ? s.masked : "not set";
+      el("keypill").innerHTML = s.key_set ? '<span class="pill ok">set</span>'
+                                          : '<span class="pill no">missing</span>';
+    });
+}
+el("keysave").onclick = function(){
+  var v = el("keyin").value.trim();
+  if (!v){ el("keyhint").textContent = "Enter a key first."; return; }
+  this.disabled = true;
+  fetch("/api/key", {method: "POST", headers: {"Content-Type": "application/json"},
+                     body: JSON.stringify({api_key: v})})
+    .then(function(r){ return r.json().then(function(j){ return {ok: r.ok, j: j}; }); })
+    .then(function(res){
+      el("keyin").value = "";
+      el("keyhint").textContent = res.ok
+        ? (res.j.persisted ? "Saved to .env and applied -- survives restarts."
+                           : "Applied for this run only (.env is not writable here).")
+        : "Failed: " + (res.j.error || "unknown error");
+      loadKey(); poll();
+    })
+    .catch(function(){ el("keyhint").textContent = "Request failed."; })
+    .finally(function(){ el("keysave").disabled = false; });
+};
+loadKey();
 
 poll();
 setInterval(function(){
