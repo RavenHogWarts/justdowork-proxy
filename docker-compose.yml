@@ -18,6 +18,12 @@ services:
     image: ccproxy
     container_name: ccproxy
     restart: unless-stopped
+    init: true                    # PID-1 signal handling / zombie reaping
+    logging:
+      driver: json-file           # keep `docker logs` bounded
+      options:
+        max-size: "10m"
+        max-file: "3"
     # host binding defaults to loopback: the proxy has no auth of its own,
     # so anyone who can reach the port can spend your relay key.
     # Set CCPROXY_BIND=0.0.0.0 only on a trusted, firewalled network.
@@ -27,6 +33,8 @@ services:
       # optional overrides; empty means "use config.json"
       TARGET_URL: "${TARGET_URL:-}"
       UI_LANG: "${UI_LANG:-}"
+      # optional access token for anything beyond loopback (see DOCKER.md)
+      CCPROXY_TOKEN: "${CCPROXY_TOKEN:-}"
     # Optional: mount an .env file to persist a fallback key across
     # container REcreations (a plain `docker restart` already keeps it):
     # volumes:

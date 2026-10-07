@@ -321,7 +321,7 @@ def make_rec(n, ctx, message=None, ok=True, status=0, note=""):
         "ok": bool(ok), "status": int(status), "tools": int(ctx.get("n_tools", 0)),
         "tool_calls": sum(d["tool_uses"].values()) + sum(d["server_tools"].values()),
         "drops": d["drops"], "retries": d["retries"],
-        "names": names, "note": note,
+        "names": names, "note": note, "key_src": str(ctx.get("key_src") or ""),
     }
 
 
@@ -1319,6 +1319,33 @@ def execute_server_tool(name, tool_input, feats):
 # Upstream call
 # --------------------------------------------------------------------------- #
 
+def _proxy_token():
+    """The optional access token (CCPROXY_TOKEN env or config proxy_token).
+    When set, every route except /health requires it -- for exposing the
+    proxy beyond loopback. Empty string = auth off (the default)."""
+    tok = (os.environ.get("CCPROXY_TOKEN")
+           or str(CONFIG.get("proxy_token") or "")).strip()
+    return re.sub(r"[^\x21-\x7e]", "", tok)
+
+
+@app.before_request
+def _proxy_auth():
+    tok = _proxy_token()
+    if not tok or request.path == "/health":
+        return None
+    supplied = (request.headers.get("X-Proxy-Token") or "").strip()
+    if supplied != tok:
+        auth = (request.headers.get("Authorization") or "").strip()
+        if auth.lower().startswith("bearer ") and auth[7:].strip() == tok:
+            supplied = tok            # the Bearer carried the PROXY token
+    if supplied != tok:
+        return Response(json.dumps({"type": "error", "error": {
+            "type": "authentication_error",
+            "message": "proxy token required: send X-Proxy-Token (or Bearer)"}}),
+            status=401, content_type="application/json")
+    return None
+
+
 def _client_supplied_key():
     """The API key the client sent (x-api-key, or Authorization: Bearer).
     With client_key_passthrough on, it becomes the upstream key, so a
@@ -1328,7 +1355,9 @@ def _client_supplied_key():
     if not has_request_context():
         return ""
     k = (request.headers.get("x-api-key") or "").strip()
-    if not k:
+    if not k and not _proxy_token():
+        # with proxy-token auth on, Bearer carries the PROXY token and the
+        # relay key must come from x-api-key (or the configured fallback)
         auth = request.headers.get("Authorization") or ""
         if auth.lower().startswith("bearer "):
             k = auth[7:].strip()
@@ -1885,15 +1914,16 @@ def v1_messages():
     t0 = time.time()
     ctx = {"breakdown": breakdown, "t0": t0, "stream": wants_stream,
            "client_msgs": len(body.get("messages") or []), "n_tools": len(tools),
-           "snap0": snap_counts(),
+           "snap0": snap_counts(), "key_src": "client" if _client_supplied_key() else "config",
            "payload_chars": len(json.dumps(payload, ensure_ascii=False))}
 
     if wants_stream:
+        # no Connection header: PEP 3333 forbids hop-by-hop headers and
+        # waitress enforces it (Flask's dev server silently tolerated one)
         return Response(stream_with_context(
             _stream(payload, body, valid_names, breakdown, t0, n, ctx)),
             content_type="text/event-stream; charset=utf-8",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
-                     "Connection": "keep-alive"})
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     try:
         status, upstream = resolve_with_fallback(payload, FEATS)
@@ -2050,7 +2080,8 @@ def health():
     return Response(json.dumps({"ok": True, "upstream": CONFIG["upstream_base_url"],
                                 "model": CONFIG["model"],
                                 "key_set": bool(CONFIG.get("api_key")),
-                                "client_key_passthrough": bool(FEATS.get("client_key_passthrough", True))}),
+                                "client_key_passthrough": bool(FEATS.get("client_key_passthrough", True)),
+                                "auth_required": bool(_proxy_token())}),
                     content_type="application/json")
 
 
@@ -2123,6 +2154,27 @@ def _shutdown(*_):
     sys.exit(0)
 
 
+def serve_app(app_obj, host, port):
+    """Serve with waitress when available (production WSGI, pure Python),
+    else Flask's dev server. CCPROXY_SERVER=flask forces the fallback.
+    outbuf_overflow=1 flushes every SSE event immediately -- with the default
+    1MB buffer the keep-alive ping would sit in the buffer for the whole
+    upstream wait and the client would time out."""
+    backend = None
+    if os.environ.get("CCPROXY_SERVER", "").lower() != "flask":
+        try:
+            from waitress import serve as backend
+        except ImportError:
+            pass
+    if backend:
+        log("serving via waitress (set CCPROXY_SERVER=flask to fall back)")
+        backend(app_obj, host=host, port=int(port), threads=16,
+                connection_limit=64, channel_timeout=900, outbuf_overflow=1,
+                ident="ccproxy")
+    else:
+        app_obj.run(host=host, port=int(port), debug=False, threaded=True)
+
+
 if __name__ == "__main__":
     if not CONFIG.get("api_key"):
         if FEATS.get("client_key_passthrough", True):
@@ -2144,4 +2196,4 @@ if __name__ == "__main__":
     port = int(CONFIG.get("listen_port", 8181))
     log(f"ccproxy ready -> http://{host}:{port}/v1   (upstream: {CONFIG['upstream_base_url']})")
     log(f"native map: {NAME_MAP} | server tools: {sorted(SERVER_TOOL_NAMES)}")
-    app.run(host=host, port=port, debug=False, threaded=True)
+    serve_app(app, host, port)

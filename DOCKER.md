@@ -69,6 +69,16 @@ docker build -t ccproxy .
 docker run -d --name ccproxy -p 127.0.0.1:18181:8181 ccproxy
 ```
 
+Or skip the clone entirely with the published image: GitHub Actions
+builds an amd64 + arm64 image on every `v*` tag and pushes it to GHCR
+(CI also runs both test suites and validates the Dockerfile on every
+push):
+
+```sh
+docker run -d --name ccproxy -p 127.0.0.1:18181:8181 \
+  ghcr.io/ravenhogwarts/justdowork-proxy
+```
+
 ---
 
 ## Connecting Claude Code
@@ -147,11 +157,25 @@ the image) only if you want either of:
 Precedence inside ccproxy: real environment variables > `.env` >
 `config.json`.
 
-Security note: the proxy has **no authentication of its own** — whoever
-can reach the port can spend your (fallback) key. Compose therefore
-binds to `127.0.0.1` on the host by default. To serve other machines set
-`CCPROXY_BIND=0.0.0.0` **and** firewall it or put an auth-checking
-reverse proxy in front.
+Security note: by default the proxy has **no authentication of its own**
+— whoever can reach the port can spend your (fallback) key. Compose
+therefore binds to `127.0.0.1` on the host by default. To serve other
+machines, enable the access token:
+
+* set `CCPROXY_TOKEN=<random-string>` (compose passes it through, e.g.
+  `CCPROXY_TOKEN=x1y2z3 docker compose up -d`)
+* every route except `/health` then requires an `X-Proxy-Token: <token>`
+  header (or `Authorization: Bearer <token>`); `/health` stays open for
+  the container healthcheck — it exposes status only, never the key
+* the Bearer value is then the PROXY token and is never forwarded as
+  the relay key — the relay key comes from `x-api-key` or the fallback
+  (for Claude Code use `ANTHROPIC_API_KEY=<token>` so it is sent as
+  Bearer, plus a fallback key)
+* the dashboard asks for the token once and remembers it in the browser
+
+Still combine the token with `CCPROXY_BIND` / firewall rules. An `.env`
+file, if you create one, is git-ignored and kept out of the image. Keys
+only ever go to the relay configured in `config.json` / `TARGET_URL`.
 
 ---
 
@@ -311,6 +335,9 @@ enable `dump_requests: true`, the same applies to `debug_dump/`
 ## Image details
 
 * Base `python:3.12-slim` (ccproxy supports 3.9+; 3.12 is current slim)
+* Served by **waitress** (production WSGI); falls back to Flask's dev
+  server when missing (`CCPROXY_SERVER=flask` forces the fallback);
+  SSE events flush immediately
 * Runs as a dedicated non-root `ccproxy` user; `/app` is chowned to it
   because ccproxy writes its log (and dumps) next to itself
 * Only `ccproxy.py`, `dashboard.py`, `config.json`, `requirements.txt`

@@ -230,6 +230,20 @@ curl -X POST http://127.0.0.1:18181/api/key \
 不用 compose、直接 `docker run` 的话，改 `-p` 左侧即可：
 `-p 127.0.0.1:28181:8181`。
 
+### 方式二 —— 直接用发布好的镜像（免克隆）
+
+仓库配置了 GitHub Actions：推一个 `v*` 标签就会自动构建 **amd64 + arm64**
+双架构镜像并发布到 GHCR（CI 也会在每次 push 时自动跑两套测试并验证
+Dockerfile 可构建）。发布后在任何有 Docker 的机器上：
+
+```sh
+docker run -d --name ccproxy -p 127.0.0.1:18181:8181 \
+  ghcr.io/ravenhogwarts/justdowork-proxy
+```
+
+密钥同样三种放法：`-e UPSTREAM_API_KEY=...` 后备、cc-switch 客户端密钥、
+或进容器后访问 `http://127.0.0.1:18181/` 面板设置。
+
 ### 界面语言
 
 dashboard 支持中英文：点右上角按钮（中 / EN）切换，选择会记住在该浏览器里；
@@ -360,10 +374,20 @@ docker compose up -d --build
 
 ## 九、安全须知
 
-* 代理本身**没有鉴权**：谁能访问到端口，谁就能消耗你的（后备）密钥。因此
-  compose 默认只绑定宿主机 `127.0.0.1`。
-* 确实要让局域网/其他机器访问时，设置 `CCPROXY_BIND=0.0.0.0`，
-  **并**配合防火墙限制来源，或在前端加一层带鉴权的反向代理。
+* 代理本身默认**没有鉴权**：谁能访问到端口，谁就能消耗你的（后备）密钥。
+  因此 compose 默认只绑定宿主机 `127.0.0.1`。
+* **要暴露给局域网/远程时，开启访问令牌**：设置环境变量
+  `CCPROXY_TOKEN=一个随机串`（compose 已透传，如
+  `CCPROXY_TOKEN=x1y2z3 docker compose up -d`）。开启后：
+  * 除 `/health` 外所有接口都要求 `X-Proxy-Token: <令牌>` 头（或
+    `Authorization: Bearer <令牌>`）；`/health` 保持开放供容器健康检查，
+    它只暴露状态不暴露密钥
+  * **Bearer 带的是代理令牌**，不会再被当作中转站密钥转发——此时中转站
+    密钥走 `x-api-key` 或后备密钥（dashboard / `.env`）
+  * dashboard 打开时会弹窗要求输入一次令牌（记住在该浏览器里）
+  * Claude Code 一侧没有注入自定义请求头的开关，走令牌模式时建议用
+    `ANTHROPIC_API_KEY=<令牌>`（作为 Bearer 发出）+ 后备密钥的组合
+* 即便有令牌，也建议配合 `CCPROXY_BIND` 与防火墙限制来源。
 * 可选的 `.env`（若你创建了）已被 `.gitignore` 忽略、被 `.dockerignore`
   排除——请勿提交到仓库，也不会被打进镜像。
 * 密钥只发往你在 `config.json` / `TARGET_URL` 里配置的中转站。
@@ -373,6 +397,8 @@ docker compose up -d --build
 ## 十、镜像细节
 
 * 基础镜像 `python:3.12-slim`（ccproxy 支持 3.9+）
+* 以 **waitress**（生产级 WSGI 服务器）服务，未安装时自动回退 Flask 开发
+  服务器（`CCPROXY_SERVER=flask` 可强制回退）；SSE 每事件即发
 * 以专用非 root 用户 `ccproxy` 运行；`/app` 目录归属该用户（ccproxy
   会在自身目录写日志与调试转储）
 * 只复制 `ccproxy.py`、`dashboard.py`、`config.json`、`requirements.txt`

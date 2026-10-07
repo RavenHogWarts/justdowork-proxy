@@ -11,6 +11,8 @@ relay, no API key needed):
 
   * client_key_passthrough: client key preferred, dummy falls back after 401,
     no key uses the configured key
+  * optional CCPROXY_TOKEN auth: 401 without/wrong token, Bearer carries the
+    proxy token (never the relay key), /health stays open, dashboard gated
   * keyless startup + GET/POST /api/key (+ .env writeback into a temp dir)
   * .env loading and keyless mode in a real isolated subprocess
   * UI_LANG override and ui_lang in /stats.json; bilingual dashboard page
@@ -20,7 +22,7 @@ relay, no API key needed):
   * usage sanitize: cache double-count + phantom block + honest passthrough
   * JSON repair: truncated-body prefix salvage, required-field backfill
 
-Run:  python test_branch.py     (expects 31 pass, 0 fail)
+Run:  python test_branch.py     (expects 40 pass, 0 fail)
 """
 import json
 import os
@@ -264,6 +266,11 @@ check("phantom usage corrected on the client response (11818 -> ~payload/3.3)",
       r.status_code == 200 and 0 < r.json()["usage"]["input_tokens"] < 2000,
       f"client saw {r.json()['usage']['input_tokens']} (relay claimed 11818)")
 
+st = requests.get(PROXY + "/stats.json", timeout=30).json()
+_last = (st.get("recent") or [{}])[-1]
+check("recent rows record which key source served them",
+      _last.get("key_src") in ("client", "config"), f"key_src={_last.get('key_src')!r}")
+
 # --- keyless mode + /api/key (writeback isolated into a temp dir) ----------
 print("\n=== 6. keyless mode + /api/key ===")
 
@@ -298,9 +305,47 @@ finally:
     shutil.rmtree(tmpdir, ignore_errors=True)
 
 # --------------------------------------------------------------------------- #
-# 7. isolated subprocess: .env loading + keyless startup
+# 7. optional proxy-token auth (CCPROXY_TOKEN)
 # --------------------------------------------------------------------------- #
-print("\n=== 7. isolated subprocess (.env load, keyless start) ===")
+print("\n=== 7. proxy-token auth (CCPROXY_TOKEN) ===")
+
+os.environ["CCPROXY_TOKEN"] = "sekrit-token"
+try:
+    r = requests.post(PROXY + "/v1/messages", json=BODY, timeout=30)
+    check("no token -> 401", r.status_code == 401)
+    r = requests.post(PROXY + "/v1/messages", json=BODY,
+                      headers={"X-Proxy-Token": "wrong"}, timeout=30)
+    check("wrong token -> 401", r.status_code == 401)
+    r = requests.get(PROXY + "/stats.json", timeout=30)
+    check("dashboard endpoints also gated", r.status_code == 401)
+    r = requests.get(PROXY + "/health", timeout=30)
+    check("/health stays open (docker HEALTHCHECK)", r.status_code == 200
+          and r.json().get("auth_required") is True)
+
+    mark = len(SEEN_KEYS)
+    r = requests.post(PROXY + "/v1/messages", json=BODY,
+                      headers={"X-Proxy-Token": "sekrit-token",
+                               "x-api-key": "sk-client-valid"}, timeout=30)
+    check("X-Proxy-Token accepted; relay key still passthrough",
+          r.status_code == 200 and SEEN_KEYS[-1] == "sk-client-valid")
+
+    mark = len(SEEN_KEYS)
+    r = requests.post(PROXY + "/v1/messages", json=BODY,
+                      headers={"Authorization": "Bearer sekrit-token"}, timeout=30)
+    check("Bearer carrying the PROXY token accepted; Bearer NOT used as relay key",
+          r.status_code == 200 and SEEN_KEYS[-1] == "sk-config-key",
+          f"upstream saw {SEEN_KEYS[-1]}")
+finally:
+    del os.environ["CCPROXY_TOKEN"]
+
+r = requests.get(PROXY + "/health", timeout=30).json()
+check("auth off again after unsetting CCPROXY_TOKEN",
+      r.get("auth_required") is False)
+
+# --------------------------------------------------------------------------- #
+# 8. isolated subprocess: .env loading, keyless startup, waitress + SSE
+# --------------------------------------------------------------------------- #
+print("\n=== 8. isolated subprocess (.env load, keyless start, waitress+SSE) ===")
 
 iso = tempfile.mkdtemp(prefix="ccproxy-iso-")
 for fn in ("ccproxy.py", "dashboard.py", "config.json"):
@@ -313,10 +358,11 @@ open(runner, "w", encoding="utf-8").write(
     "os.environ['PORT'] = '8797'\n"
     "os.environ.pop('UPSTREAM_API_KEY', None)\n"
     "import ccproxy\n"
-    "ccproxy.app.run(host='127.0.0.1', port=8797, debug=False, threaded=True)\n")
+    "ccproxy.serve_app(ccproxy.app, '127.0.0.1', 8797)\n")
 
 env = {k: v for k, v in os.environ.items()
-       if k.upper() not in ("UPSTREAM_API_KEY", "TARGET_URL", "PORT", "UI_LANG", "LISTEN_HOST")}
+       if k.upper() not in ("UPSTREAM_API_KEY", "TARGET_URL", "PORT", "UI_LANG",
+                            "LISTEN_HOST", "CCPROXY_TOKEN", "CCPROXY_SERVER")}
 ISO = "http://127.0.0.1:8797"
 
 
@@ -356,6 +402,15 @@ try:
     r = requests.post(ISO + "/v1/messages", json=BODY, timeout=30)
     check("no client key -> the .env key reaches upstream",
           r.status_code == 200 and SEEN_KEYS[-1] == "sk-from-envfile")
+
+    r = requests.post(ISO + "/v1/messages", json=dict(BODY, stream=True),
+                      headers={"x-api-key": "sk-from-envfile"}, timeout=30, stream=True)
+    sse_text = "".join(chunk.decode("utf-8", "replace") for chunk in r.iter_content(chunk_size=None))
+    check("SSE stream complete through serve_app (waitress when installed)",
+          "event: message_start" in sse_text and "event: message_stop" in sse_text
+          and "event: ping" in sse_text,
+          "waitress" if not os.environ.get("CCPROXY_SERVER") else "flask")
+    r.close()
     p.terminate()
     p.wait(timeout=10)
 finally:

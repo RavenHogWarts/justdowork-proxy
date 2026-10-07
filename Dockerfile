@@ -25,8 +25,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # dependencies first, so code changes don't invalidate this layer
+# waitress = production WSGI server; ccproxy falls back to Flask's dev
+# server automatically when it is missing
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt waitress
 
 COPY LICENSE README.md ./
 COPY ccproxy.py dashboard.py config.json ./

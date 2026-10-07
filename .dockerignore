@@ -17,6 +17,7 @@ ccproxy_log.txt*
 
 # not needed inside the container (host-side helpers)
 .git/
+.github/
 .gitignore
 start.sh
 start.bat

@@ -145,7 +145,8 @@ DASHBOARD_HTML = r"""<!doctype html>
         <th class="num" data-i18n="thMsgs"></th>
         <th class="num" data-i18n="thInput"></th><th class="num" data-i18n="thOutput"></th>
         <th class="num" data-i18n="thSec"></th>
-        <th data-i18n="thTools"></th><th class="num" data-i18n="thDrops"></th>
+        <th data-i18n="thTools"></th><th data-i18n="thKeySrc"></th>
+        <th class="num" data-i18n="thDrops"></th>
         <th data-i18n="thNote"></th>
       </tr></thead>
       <tbody id="rows"></tbody>
@@ -214,6 +215,8 @@ var I18N = {
     emptyTable: "No requests yet. Point Claude Code at this proxy " +
                 "(set ANTHROPIC_BASE_URL to its address) and ask it something.",
     okWord: "ok", dash: "-",
+    thKeySrc: "Key", keySrcClient: "client", keySrcConfig: "config",
+    tokenPrompt: "This proxy requires an access token (X-Proxy-Token):",
     keyCurrent: "current:", notSet: "not set",
     pillSet: "set", pillMissing: "missing",
     pillClientNone: "none &mdash; client-supplied keys in use",
@@ -264,6 +267,8 @@ var I18N = {
     emptyTable: "还没有请求。把 Claude Code 指向本代理（设置 ANTHROPIC_BASE_URL" +
                 " 为其地址）后随便问点什么。",
     okWord: "正常", dash: "-",
+    thKeySrc: "密钥来源", keySrcClient: "客户端", keySrcConfig: "配置",
+    tokenPrompt: "此代理需要访问令牌（X-Proxy-Token）：",
     keyCurrent: "当前：", notSet: "未设置",
     pillSet: "已设置", pillMissing: "缺失",
     pillClientNone: "无 &mdash; 正在使用客户端密钥",
@@ -488,12 +493,14 @@ function render(s){
       '<td class="num">' + fmt(r.out_tok) + "</td>" +
       '<td class="num">' + r.dur + "</td>" +
       "<td>" + (nm ? esc(nm) : '<span class="muted">' + t("dash") + "</span>") + "</td>" +
+      "<td>" + (r.key_src ? (r.key_src === "client" ? t("keySrcClient") : t("keySrcConfig"))
+                         : '<span class="muted">' + t("dash") + "</span>") + "</td>" +
       '<td class="num">' + (r.drops ? '<span class="pill dr">' + r.drops + "</span>" : t("dash")) + "</td>" +
       "<td>" + (r.note ? esc(r.note) : '<span class="muted">' + t("okWord") + "</span>") + "</td>" +
       "</tr>";
   }
   el("rows").innerHTML = rows ||
-    '<tr><td colspan="10" class="empty">' + t("emptyTable") + "</td></tr>";
+    '<tr><td colspan="11" class="empty">' + t("emptyTable") + "</td></tr>";
 
   // ---- errors ----
   var errs = s.errors || [];
@@ -509,8 +516,34 @@ function render(s){
   }
 }
 
+/* fetch wrapper: attaches the proxy access token (CCPROXY_TOKEN) when one
+   is stored; on 401 asks for it once per page load, then leaves the caller
+   to see the error */
+var tokenPrompted = false;
+function ffetch(url, opts){
+  opts = opts || {};
+  var tok = null;
+  try { tok = localStorage.getItem("ccproxy_token"); } catch (e) {}
+  if (tok){
+    opts.headers = Object.assign({}, opts.headers, {"X-Proxy-Token": tok});
+  }
+  return fetch(url, opts).then(function(r){
+    if (r.status === 401 && !tokenPrompted){
+      tokenPrompted = true;
+      var v = prompt(t("tokenPrompt"));
+      if (v){
+        try { localStorage.setItem("ccproxy_token", v); } catch (e) {}
+        opts.headers = Object.assign({}, opts.headers, {"X-Proxy-Token": v});
+        return fetch(url, opts);
+      }
+      try { localStorage.removeItem("ccproxy_token"); } catch (e) {}
+    }
+    return r;
+  });
+}
+
 function poll(){
-  fetch("/stats.json", {cache: "no-store"})
+  ffetch("/stats.json", {cache: "no-store"})
     .then(function(r){ return r.json(); })
     .then(function(s){ render(s); tick = 0; })
     .catch(function(){ el("dot").className = "dot off"; });
@@ -523,11 +556,11 @@ el("pause").onclick = function(){
 };
 el("reset").onclick = function(){
   if (!confirm(t("confirmReset"))) return;
-  fetch("/stats/reset", {method: "POST"}).then(poll);
+  ffetch("/stats/reset", {method: "POST"}).then(poll);
 };
 
 function loadKey(){
-  fetch("/api/key", {cache: "no-store"})
+  ffetch("/api/key", {cache: "no-store"})
     .then(function(r){ return r.json(); })
     .then(function(s){
       el("keycur").textContent = s.key_set ? s.masked : t("notSet");
@@ -542,8 +575,8 @@ el("keysave").onclick = function(){
   var v = el("keyin").value.trim();
   if (!v){ el("keyhint").textContent = t("keyEnterFirst"); return; }
   this.disabled = true;
-  fetch("/api/key", {method: "POST", headers: {"Content-Type": "application/json"},
-                     body: JSON.stringify({api_key: v})})
+  ffetch("/api/key", {method: "POST", headers: {"Content-Type": "application/json"},
+                      body: JSON.stringify({api_key: v})})
     .then(function(r){ return r.json().then(function(j){ return {ok: r.ok, j: j}; }); })
     .then(function(res){
       el("keyin").value = "";
