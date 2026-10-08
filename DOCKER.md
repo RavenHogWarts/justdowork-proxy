@@ -4,7 +4,8 @@ ccproxy is a single Python process with two pure-Python dependencies
 (`flask`, `requests`), so it containers cleanly: no compiler, no system
 packages, no venv juggling. This file covers everything Docker-specific —
 for what the proxy *does* and how to configure the relay, read the
-[README](README.md) first. 中文文档：[DOCKER.zh-CN.md](DOCKER.zh-CN.md)。
+[README](README.md) first. 中文文档：[README.zh-CN.md](README.zh-CN.md) ·
+[DOCKER.zh-CN.md](DOCKER.zh-CN.md)。
 
 > The Docker support lives on the `docker` branch of
 > [RavenHogWarts/justdowork-proxy](https://github.com/RavenHogWarts/justdowork-proxy)

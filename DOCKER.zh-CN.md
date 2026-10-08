@@ -3,7 +3,8 @@
 ccproxy 是一个单进程 Python 服务，仅依赖 `flask` 和 `requests` 两个纯 Python
 包，因此非常适合容器化：无需编译器、无需系统级安装、无需虚拟环境。
 本文只讲 Docker 相关的内容；代理本身的功能与中转站配置请先阅读
-[README](README.md)，Docker 英文文档见 [DOCKER.md](DOCKER.md)。
+[README 中文版](README.zh-CN.md)（[English](README.md)），Docker 英文文档见
+[DOCKER.md](DOCKER.md)。
 
 > Docker 支持位于本仓库的 `docker` 分支；`main` 分支保持与上游一致。
 > 对上游文件的改动刻意保持最小，其余均为新增文件。
